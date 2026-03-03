@@ -1,0 +1,237 @@
+---
+title: 'CardioTransaction'
+description: 'Transaction context class for executing queries within database transactions'
+---
+
+## Overview
+
+The `CardioTransaction` class represents a database transaction context. It provides methods for executing queries and statements within a transaction. Instances are typically obtained through `Cardio.inTransaction()` or `CardioRepository.transaction()`.
+
+## Constructor
+
+```kotlin
+class CardioTransaction(val c: SqlConnection)
+```
+
+<ParamField path="c" type="SqlConnection" required>
+  The underlying SQL connection associated with this transaction.
+</ParamField>
+
+## Methods
+
+### query
+
+Executes a SQL query and transforms each result row using the provided function.
+
+```kotlin
+suspend fun <T> query(
+    stmt: String,
+    args: List<Any?> = EmptyArgs,
+    transform: (Row) -> T
+): List<T>
+```
+
+<ParamField path="stmt" type="String" required>
+  SQL query statement. Use `$1`, `$2`, etc. for parameter placeholders.
+</ParamField>
+
+<ParamField path="args" type="List<Any?>" default="emptyList()">
+  List of query parameters corresponding to the placeholders in the statement. Defaults to an empty list for queries without parameters.
+</ParamField>
+
+<ParamField path="transform" type="(Row) -> T" required>
+  Lambda function that transforms each result row into type `T`. The `Row` parameter represents a single row from the query result.
+</ParamField>
+
+**Returns:** `List<T>` - List of transformed results, one for each row returned by the query.
+
+**Example:**
+
+```kotlin
+cardio.inTransaction {
+    val users = query(
+        stmt = "SELECT id, name, email FROM users WHERE age > $1",
+        args = listOf(18)
+    ) { row ->
+        User(
+            id = row.getInteger("id"),
+            name = row.getString("name"),
+            email = row.getString("email")
+        )
+    }
+}
+```
+
+### execute
+
+Executes a SQL statement (INSERT, UPDATE, DELETE) and returns the number of affected rows.
+
+```kotlin
+suspend fun execute(
+    stmt: String,
+    args: List<Any?> = EmptyArgs
+): Long
+```
+
+<ParamField path="stmt" type="String" required>
+  SQL statement to execute. Use `$1`, `$2`, etc. for parameter placeholders.
+</ParamField>
+
+<ParamField path="args" type="List<Any?>" default="emptyList()">
+  List of statement parameters corresponding to the placeholders. Defaults to an empty list for statements without parameters.
+</ParamField>
+
+**Returns:** `Long` - The number of rows affected by the statement.
+
+**Example:**
+
+```kotlin
+cardio.inTransaction {
+    val rowsAffected = execute(
+        stmt = "UPDATE users SET status = $1 WHERE age < $2",
+        args = listOf("inactive", 18)
+    )
+    println("Updated $rowsAffected users")
+}
+```
+
+## Context Class
+
+The `CardioTransaction.Context` class is a coroutine context element that carries the transaction through the coroutine scope.
+
+```kotlin
+data class Context(val tx: CardioTransaction) : CoroutineContext.Element
+```
+
+<ResponseField name="tx" type="CardioTransaction">
+  The transaction instance associated with this context.
+</ResponseField>
+
+This context is automatically managed by the `inTransaction` method and allows repository methods to access the current transaction via the coroutine context.
+
+## Usage Examples
+
+### Basic Query
+
+```kotlin
+cardio.inTransaction {
+    val users = query(
+        stmt = "SELECT id, name FROM users"
+    ) { row ->
+        row.getInteger("id") to row.getString("name")
+    }
+    
+    println("Found ${users.size} users")
+}
+```
+
+### Parameterized Query
+
+```kotlin
+cardio.inTransaction {
+    val activeUsers = query(
+        stmt = "SELECT * FROM users WHERE status = $1 AND age >= $2",
+        args = listOf("active", 21)
+    ) { row ->
+        User(
+            id = row.getInteger("id"),
+            name = row.getString("name"),
+            status = row.getString("status"),
+            age = row.getInteger("age")
+        )
+    }
+}
+```
+
+### Insert with RETURNING
+
+```kotlin
+cardio.inTransaction {
+    val newUserId = query(
+        stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+        args = listOf("John Doe", "john@example.com")
+    ) { row ->
+        row.getInteger("id")
+    }.first()
+    
+    println("Created user with ID: $newUserId")
+}
+```
+
+### Update Statement
+
+```kotlin
+cardio.inTransaction {
+    val updated = execute(
+        stmt = "UPDATE users SET last_login = NOW() WHERE id = $1",
+        args = listOf(userId)
+    )
+    
+    if (updated == 0L) {
+        throw IllegalArgumentException("User not found")
+    }
+}
+```
+
+### Delete Statement
+
+```kotlin
+cardio.inTransaction {
+    val deleted = execute(
+        stmt = "DELETE FROM sessions WHERE expires_at < $1",
+        args = listOf(System.currentTimeMillis())
+    )
+    
+    println("Deleted $deleted expired sessions")
+}
+```
+
+### Multiple Operations
+
+```kotlin
+cardio.inTransaction {
+    // Create a user
+    val userId = query(
+        stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+        args = listOf("Alice", "alice@example.com")
+    ) { row -> row.getInteger("id") }.first()
+    
+    // Create a profile for the user
+    execute(
+        stmt = "INSERT INTO profiles (user_id, bio) VALUES ($1, $2)",
+        args = listOf(userId, "Software developer")
+    )
+    
+    // Add initial settings
+    execute(
+        stmt = "INSERT INTO settings (user_id, theme) VALUES ($1, $2)",
+        args = listOf(userId, "dark")
+    )
+    
+    // All operations committed together
+    userId
+}
+```
+
+## Transaction Behavior
+
+- **Automatic Commit**: If the transaction block completes successfully, the transaction is automatically committed.
+- **Automatic Rollback**: If an exception is thrown within the transaction block, the transaction is automatically rolled back.
+- **Connection Management**: The connection is automatically returned to the pool after the transaction completes.
+
+```kotlin
+try {
+    cardio.inTransaction {
+        execute("INSERT INTO accounts (balance) VALUES ($1)", listOf(100))
+        
+        // This will cause a rollback
+        throw IllegalStateException("Something went wrong")
+        
+        // This line is never reached
+        execute("INSERT INTO logs (message) VALUES ($1)", listOf("Success"))
+    }
+} catch (e: IllegalStateException) {
+    // Transaction was rolled back
+    println("Transaction failed: ${e.message}")
+}
+```

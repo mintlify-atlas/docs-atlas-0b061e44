@@ -1,0 +1,288 @@
+---
+title: Queries
+description: Execute parameterized queries and map results with Cardio's query methods
+---
+
+## Overview
+
+Cardio provides a simple and type-safe API for executing SQL queries with automatic parameter binding and result mapping.
+
+## Query Method
+
+The `query` method executes a SELECT statement and transforms rows into domain objects:
+
+```kotlin
+suspend fun <T> query(
+    stmt: String,
+    args: List<Any?> = EmptyArgs,
+    transform: (Row) -> T
+): List<T>
+```
+
+### Parameters
+
+<ParamField path="stmt" type="String" required>
+  SQL query statement with positional parameters (`$1`, `$2`, etc.)
+</ParamField>
+
+<ParamField path="args" type="List<Any?>" default="emptyList()">
+  List of parameter values in the order they appear in the statement
+</ParamField>
+
+<ParamField path="transform" type="(Row) -> T" required>
+  Lambda function that maps each result row to a domain object
+</ParamField>
+
+### Returns
+
+<ResponseField name="List<T>" type="List<T>">
+  List of transformed objects, one per result row. Returns an empty list if no rows match.
+</ResponseField>
+
+## Basic Query
+
+Execute a simple query without parameters:
+
+```kotlin
+cardio.inTransaction { tx ->
+    val users = tx.query("SELECT * FROM users") { row ->
+        User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name")
+        )
+    }
+}
+```
+
+## Parameterized Queries
+
+Use positional parameters (`$1`, `$2`, etc.) for safe parameter binding:
+
+```kotlin
+cardio.inTransaction { tx ->
+    val activeUsers = tx.query(
+        "SELECT * FROM users WHERE active = $1 AND role = $2",
+        listOf(true, "admin")
+    ) { row ->
+        User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            role = row.getAs<String>("role")
+        )
+    }
+}
+```
+
+<Warning>
+Always use parameterized queries with `$1`, `$2` syntax instead of string interpolation to prevent SQL injection attacks.
+</Warning>
+
+## Row Mapping
+
+The `transform` lambda receives a `Row` object for each result. Use extension methods to extract typed values:
+
+### Type-Safe Column Access
+
+```kotlin
+val user = tx.query("SELECT * FROM users WHERE id = $1", listOf(userId)) { row ->
+    User(
+        id = row.getAs<Int>("id"),              // Throws if null
+        name = row.getAs<String>("name"),
+        email = row.getAsNullable<String>("email") // Returns null if column is null
+    )
+}.firstOrNull()
+```
+
+### Available Extensions
+
+<ParamField path="getAs<T>" type="T">
+  Gets the column value as type `T`. Throws an exception if the value is null.
+</ParamField>
+
+<ParamField path="getAsNullable<T>" type="T?">
+  Gets the column value as type `T?`. Returns `null` if the column value is null.
+</ParamField>
+
+## Handling Results
+
+The query method returns a `List<T>`, which you can process with standard Kotlin collection operations:
+
+### Single Result
+
+```kotlin
+val user = tx.query(
+    "SELECT * FROM users WHERE id = $1",
+    listOf(userId)
+) { row ->
+    User(
+        id = row.getAs<Int>("id"),
+        name = row.getAs<String>("name")
+    )
+}.firstOrNull()
+```
+
+### Multiple Results
+
+```kotlin
+val users = tx.query(
+    "SELECT * FROM users WHERE active = $1",
+    listOf(true)
+) { row ->
+    User(
+        id = row.getAs<Int>("id"),
+        name = row.getAs<String>("name")
+    )
+}
+
+println("Found ${users.size} active users")
+```
+
+### Count Query
+
+```kotlin
+val count = tx.query("SELECT COUNT(*) as total FROM users") { row ->
+    row.getAs<Long>("total")
+}.first()
+```
+
+## Complex Queries
+
+### Joins
+
+```kotlin
+val ordersWithCustomers = tx.query(
+    """
+    SELECT o.id, o.total, c.name as customer_name
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.id
+    WHERE o.created_at > $1
+    """.trimIndent(),
+    listOf(startDate)
+) { row ->
+    OrderWithCustomer(
+        orderId = row.getAs<Int>("id"),
+        total = row.getAs<BigDecimal>("total"),
+        customerName = row.getAs<String>("customer_name")
+    )
+}
+```
+
+### Aggregations
+
+```kotlin
+val stats = tx.query(
+    """
+    SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN active THEN 1 END) as active_users
+    FROM users
+    """.trimIndent()
+) { row ->
+    UserStats(
+        total = row.getAs<Long>("total_users"),
+        active = row.getAs<Long>("active_users")
+    )
+}.first()
+```
+
+## Execute Method
+
+For INSERT, UPDATE, or DELETE operations, use the `execute` method:
+
+```kotlin
+suspend fun execute(
+    stmt: String,
+    args: List<Any?> = EmptyArgs
+): Long
+```
+
+### Insert
+
+```kotlin
+val rowsInserted = tx.execute(
+    "INSERT INTO users (name, email) VALUES ($1, $2)",
+    listOf("John Doe", "john@example.com")
+)
+```
+
+### Update
+
+```kotlin
+val rowsUpdated = tx.execute(
+    "UPDATE users SET last_login = NOW() WHERE active = $1",
+    listOf(true)
+)
+```
+
+### Delete
+
+```kotlin
+val rowsDeleted = tx.execute(
+    "DELETE FROM users WHERE inactive_since < $1",
+    listOf(cutoffDate)
+)
+```
+
+<Info>
+The `execute` method returns the number of affected rows as a `Long`.
+</Info>
+
+## Complete Example
+
+```kotlin
+data class User(
+    val id: Int,
+    val name: String,
+    val active: Boolean
+)
+
+cardio.inTransaction { tx ->
+    // Execute a query
+    val users = tx.query(
+        "SELECT * FROM users WHERE active = $1",
+        listOf(true)
+    ) { row ->
+        User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            active = row.getAs<Boolean>("active")
+        )
+    }
+    
+    // Execute an update
+    tx.execute(
+        "UPDATE users SET last_login = NOW() WHERE active = $1",
+        listOf(true)
+    )
+    
+    users
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Parameters" icon="shield">
+    Always use `$1`, `$2` parameters instead of string interpolation
+  </Card>
+  <Card title="Handle Nulls" icon="circle-question">
+    Use `getAsNullable` for columns that may contain NULL values
+  </Card>
+  <Card title="Transform Early" icon="wand-magic-sparkles">
+    Map rows to domain objects in the transform lambda
+  </Card>
+  <Card title="Check Empty Results" icon="list">
+    Use `firstOrNull()` for single results to handle empty result sets
+  </Card>
+</CardGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="CardioTransaction API" icon="book" href="/api/cardio-transaction">
+    Full API reference for transaction methods
+  </Card>
+  <Card title="Transactions" icon="rotate" href="/core/transactions">
+    Learn about transaction management
+  </Card>
+</CardGroup>

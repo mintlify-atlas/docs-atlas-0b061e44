@@ -1,0 +1,182 @@
+---
+title: 'Connection URL Parsing'
+description: 'Learn how to configure PostgreSQL connections using connection URLs'
+---
+
+## Overview
+
+Cardio provides a convenient `url()` configuration method that parses PostgreSQL connection URLs and automatically configures your database connection. This approach simplifies connection setup by allowing you to specify all connection parameters in a single string.
+
+## URL Format
+
+The connection URL follows the standard PostgreSQL format:
+
+```
+postgres://[user[:password]@]host[:port][/database][?param=value&...]
+```
+
+### Supported Schemes
+
+Cardio supports both standard PostgreSQL URL schemes:
+- `postgres://`
+- `postgresql://`
+
+<Note>
+If you provide a URL with an unsupported scheme, Cardio will throw an `IllegalArgumentException`.
+</Note>
+
+## Basic Usage
+
+Use the `url()` method within your `Cardio.Configuration` block:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    url("postgres://user:password@localhost:5432/my_database")
+}
+```
+
+## URL Components
+
+### Host and Port
+
+The host and port specify where your PostgreSQL server is running:
+
+```kotlin
+// Default port (5432)
+url("postgres://localhost/mydb")
+
+// Custom port
+url("postgres://localhost:5433/mydb")
+
+// Remote host
+url("postgres://db.example.com:5432/mydb")
+```
+
+<Info>
+If no port is specified, Cardio defaults to port `5432`. If no host is specified, it defaults to `localhost`.
+</Info>
+
+### Authentication
+
+Include credentials in the URL using the `user:password@` format:
+
+```kotlin
+// With username and password
+url("postgres://myuser:secret@localhost/mydb")
+
+// Username only (no password)
+url("postgres://myuser@localhost/mydb")
+```
+
+### Database Name
+
+Specify the database name after the host and port:
+
+```kotlin
+url("postgres://localhost:5432/my_database")
+```
+
+## Query Parameters
+
+You can pass additional configuration options as query parameters at the end of the URL.
+
+### SSL Mode
+
+Control SSL/TLS connection behavior with the `sslmode` parameter:
+
+```kotlin
+// Disable SSL
+url("postgres://localhost/mydb?sslmode=disable")
+
+// Require SSL
+url("postgres://localhost/mydb?sslmode=require")
+
+// Verify certificate authority
+url("postgres://localhost/mydb?sslmode=verify-ca")
+
+// Full certificate verification
+url("postgres://localhost/mydb?sslmode=verify-full")
+```
+
+#### Supported SSL Modes
+
+| Mode | Description |
+|------|-------------|
+| `disable` | No SSL connection |
+| `allow` | Try non-SSL first, then SSL |
+| `prefer` | Try SSL first, then non-SSL |
+| `require` | Require SSL connection |
+| `verify-ca` | Require SSL and verify CA |
+| `verify-full` | Require SSL and verify hostname |
+
+<Warning>
+The parameter key (`sslmode`) is case-insensitive, but the value (`disable`, `require`, etc.) is case-sensitive.
+</Warning>
+
+### Multiple Parameters
+
+Combine multiple query parameters using `&`:
+
+```kotlin
+url("postgres://user:pass@localhost/mydb?sslmode=require&other=value")
+```
+
+## Complete Example
+
+Here's a full example with authentication, custom port, and SSL configuration:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    url("postgres://user:password@localhost:5432/my_database?sslmode=disable")
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
+}
+```
+
+## Under the Hood
+
+The `url()` method internally calls `pgConnectOptionsFromUrl()`, which:
+
+1. Parses the URL using `java.net.URI`
+2. Validates the scheme is `postgres` or `postgresql`
+3. Extracts host, port, credentials, and database name
+4. Processes query parameters
+5. Returns a configured `PgConnectOptions` instance
+
+Source reference: `ConnectionUrl.kt:25-27`, `ConnectionUrl.kt:36-69`
+
+## Error Handling
+
+<CodeGroup>
+```kotlin Invalid Scheme
+// This will throw IllegalArgumentException
+url("mysql://localhost/mydb")
+// Error: Unsupported scheme 'mysql'. Expected 'postgres' or 'postgresql'.
+```
+
+```kotlin Malformed URL
+// This will throw URISyntaxException
+url("not a valid url")
+```
+</CodeGroup>
+
+## Alternative Configuration
+
+If you prefer manual configuration over connection URLs, you can directly configure `PgConnectOptions`:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    connectOptions = PgConnectOptions().apply {
+        host = "localhost"
+        port = 5432
+        database = "my_database"
+        user = "user"
+        password = "password"
+    }
+}
+```
+
+<Tip>
+Connection URLs are more convenient for environment-based configuration, while manual `PgConnectOptions` provides more control over advanced settings.
+</Tip>

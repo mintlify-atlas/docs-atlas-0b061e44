@@ -1,0 +1,313 @@
+---
+title: 'Row Mapping Extensions'
+description: 'Type-safe column extraction from query result rows'
+---
+
+## Overview
+
+Cardio provides convenient extension functions for extracting typed values from `Row` objects returned by database queries. These extensions leverage Kotlin's reified generics to provide compile-time type safety while working with dynamic database results.
+
+## Extension Functions
+
+The library includes four main extension functions for row mapping:
+
+<CardGroup cols={2}>
+  <Card title="getAs<T>(name)" icon="check">
+    Get column by name, throws error if null
+  </Card>
+  <Card title="getAsNullable<T>(name)" icon="circle-question">
+    Get column by name, returns null if null
+  </Card>
+  <Card title="getAs<T>(index)" icon="list-ol">
+    Get column by index, throws error if null
+  </Card>
+  <Card title="getAsNullable<T>(index)" icon="list">
+    Get column by index, returns null if null
+  </Card>
+</CardGroup>
+
+## By Column Name
+
+### getAs&lt;T&gt;(name)
+
+Extracts a non-nullable column value by name. Throws an error if the column is null.
+
+```kotlin
+val users = tx.query("SELECT id, name, email FROM users") { row ->
+    User(
+        id = row.getAs<Int>("id"),
+        name = row.getAs<String>("name"),
+        email = row.getAs<String>("email")
+    )
+}
+```
+
+<Warning>
+If the column value is `NULL` in the database, `getAs()` will throw an error with the message: `"Column 'column_name' is null"`.
+</Warning>
+
+Source reference: `Extensions.kt:30-32`
+
+### getAsNullable&lt;T&gt;(name)
+
+Extracts a nullable column value by name. Returns `null` if the column is null.
+
+```kotlin
+val users = tx.query("SELECT id, name, middle_name FROM users") { row ->
+    User(
+        id = row.getAs<Int>("id"),
+        name = row.getAs<String>("name"),
+        middleName = row.getAsNullable<String>("middle_name") // Can be null
+    )
+}
+```
+
+Source reference: `Extensions.kt:21-23`
+
+## By Column Index
+
+### getAs&lt;T&gt;(index)
+
+Extracts a non-nullable column value by index (0-based). Throws an error if the column is null.
+
+```kotlin
+val users = tx.query("SELECT id, name, email FROM users") { row ->
+    User(
+        id = row.getAs<Int>(0),      // First column
+        name = row.getAs<String>(1),  // Second column
+        email = row.getAs<String>(2)  // Third column
+    )
+}
+```
+
+<Warning>
+If the column value is `NULL` in the database, `getAs(index)` will throw an error with the message: `"Column at index 'index' is null"`.
+</Warning>
+
+Source reference: `Extensions.kt:48-50`
+
+### getAsNullable&lt;T&gt;(index)
+
+Extracts a nullable column value by index (0-based). Returns `null` if the column is null.
+
+```kotlin
+val users = tx.query("SELECT id, name, middle_name FROM users") { row ->
+    User(
+        id = row.getAs<Int>(0),
+        name = row.getAs<String>(1),
+        middleName = row.getAsNullable<String>(2) // Can be null
+    )
+}
+```
+
+Source reference: `Extensions.kt:39-41`
+
+## Type Safety with Reified Generics
+
+All extension functions use Kotlin's `inline` and `reified` features to provide compile-time type checking:
+
+```kotlin
+inline fun <reified T> Row.getAs(name: String): T {
+    return getAsNullable(name) ?: error("Column '$name' is null")
+}
+```
+
+This allows the functions to determine the expected return type at compile time, eliminating the need for explicit casting.
+
+### Supported Types
+
+You can use any type supported by Vert.x PG Client, including:
+
+<CodeGroup>
+```kotlin Primitives
+val id = row.getAs<Int>("id")
+val price = row.getAs<Double>("price")
+val active = row.getAs<Boolean>("active")
+val count = row.getAs<Long>("count")
+```
+
+```kotlin Strings & Dates
+val name = row.getAs<String>("name")
+val createdAt = row.getAs<LocalDateTime>("created_at")
+val date = row.getAs<LocalDate>("date")
+val timestamp = row.getAs<Instant>("timestamp")
+```
+
+```kotlin Arrays & JSON
+val tags = row.getAs<Array<String>>("tags")
+val metadata = row.getAs<JsonObject>("metadata")
+val settings = row.getAs<JsonArray>("settings")
+```
+
+```kotlin UUIDs & Binary
+val uuid = row.getAs<UUID>("uuid")
+val data = row.getAs<ByteArray>("data")
+```
+</CodeGroup>
+
+## Error Handling
+
+### Null Column Values
+
+When using `getAs()` on a null column:
+
+```kotlin
+// If 'optional_field' is NULL in the database:
+val value = row.getAs<String>("optional_field")
+// Throws: java.lang.IllegalStateException: Column 'optional_field' is null
+```
+
+To handle nullable columns, use `getAsNullable()`:
+
+```kotlin
+val value = row.getAsNullable<String>("optional_field")
+// Returns: null (no exception)
+```
+
+### Missing Columns
+
+If you request a column that doesn't exist in the result set:
+
+```kotlin
+val value = row.getAs<String>("nonexistent_column")
+// Throws exception from Vert.x PG Client
+```
+
+### Type Mismatches
+
+If the requested type doesn't match the database column type:
+
+```kotlin
+// If 'price' is a NUMERIC column:
+val price = row.getAs<String>("price") // Type mismatch
+// May throw ClassCastException
+```
+
+<Tip>
+Always ensure your Kotlin types match the PostgreSQL column types for reliable type casting.
+</Tip>
+
+## Practical Examples
+
+### Mapping Complex Objects
+
+```kotlin
+data class Product(
+    val id: Int,
+    val name: String,
+    val description: String?,
+    val price: Double,
+    val stock: Int,
+    val tags: Array<String>?,
+    val createdAt: LocalDateTime
+)
+
+val products = tx.query("SELECT * FROM products") { row ->
+    Product(
+        id = row.getAs("id"),
+        name = row.getAs("name"),
+        description = row.getAsNullable("description"),
+        price = row.getAs("price"),
+        stock = row.getAs("stock"),
+        tags = row.getAsNullable("tags"),
+        createdAt = row.getAs("created_at")
+    )
+}
+```
+
+### Using with Parameterized Queries
+
+```kotlin
+val activeUsers = tx.query(
+    stmt = "SELECT * FROM users WHERE active = $1",
+    params = listOf(true)
+) { row ->
+    User(
+        id = row.getAs("id"),
+        name = row.getAs("name"),
+        email = row.getAs("email"),
+        lastLogin = row.getAsNullable("last_login")
+    )
+}
+```
+
+### Handling JSON Columns
+
+```kotlin
+data class UserSettings(
+    val theme: String,
+    val notifications: Boolean
+)
+
+val users = tx.query("SELECT id, name, settings FROM users") { row ->
+    val settingsJson = row.getAsNullable<JsonObject>("settings")
+    val settings = settingsJson?.let {
+        UserSettings(
+            theme = it.getString("theme"),
+            notifications = it.getBoolean("notifications")
+        )
+    }
+    
+    User(
+        id = row.getAs("id"),
+        name = row.getAs("name"),
+        settings = settings
+    )
+}
+```
+
+### Index-Based Mapping
+
+Useful when column names are not important:
+
+```kotlin
+val count = tx.query("SELECT COUNT(*) FROM users") { row ->
+    row.getAs<Long>(0)
+}.first()
+
+val version = tx.query("SELECT version()") { row ->
+    row.getAs<String>(0)
+}.first()
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use getAs for Required Fields">
+    Use `getAs()` for columns that should never be null. This provides early failure detection if data integrity issues occur.
+  </Step>
+  
+  <Step title="Use getAsNullable for Optional Fields">
+    Use `getAsNullable()` for columns that are legitimately optional in your database schema.
+  </Step>
+  
+  <Step title="Prefer Named Access">
+    Use column names instead of indices when possible for better readability and maintainability.
+  </Step>
+  
+  <Step title="Match Kotlin and SQL Types">
+    Ensure your Kotlin types align with PostgreSQL types to avoid casting issues.
+  </Step>
+</Steps>
+
+## Type Mapping Reference
+
+| PostgreSQL Type | Kotlin Type | Example |
+|----------------|-------------|----------|
+| `INTEGER` | `Int` | `row.getAs<Int>("id")` |
+| `BIGINT` | `Long` | `row.getAs<Long>("count")` |
+| `SMALLINT` | `Short` | `row.getAs<Short>("status")` |
+| `BOOLEAN` | `Boolean` | `row.getAs<Boolean>("active")` |
+| `VARCHAR`, `TEXT` | `String` | `row.getAs<String>("name")` |
+| `NUMERIC`, `DECIMAL` | `Double` | `row.getAs<Double>("price")` |
+| `TIMESTAMP` | `LocalDateTime` | `row.getAs<LocalDateTime>("created_at")` |
+| `DATE` | `LocalDate` | `row.getAs<LocalDate>("birth_date")` |
+| `TIME` | `LocalTime` | `row.getAs<LocalTime>("start_time")` |
+| `UUID` | `UUID` | `row.getAs<UUID>("uuid")` |
+| `JSON`, `JSONB` | `JsonObject` | `row.getAs<JsonObject>("data")` |
+| `ARRAY` | `Array<T>` | `row.getAs<Array<String>>("tags")` |
+| `BYTEA` | `ByteArray` | `row.getAs<ByteArray>("binary_data")` |
+
+<Info>
+For a complete list of type mappings, refer to the [Vert.x PG Client documentation](https://vertx.io/docs/vertx-pg-client/java/).
+</Info>

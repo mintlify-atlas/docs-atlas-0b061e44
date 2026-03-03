@@ -1,0 +1,399 @@
+---
+title: Repositories
+description: Organize data access logic using the CardioRepository base class and protected helper methods
+---
+
+## Overview
+
+The repository pattern encapsulates data access logic in dedicated classes, promoting separation of concerns and code reusability. Cardio provides `CardioRepository` as a base class for building type-safe repositories.
+
+## CardioRepository Base Class
+
+Extend `CardioRepository` to create repository classes for your domain entities:
+
+```kotlin
+open class CardioRepository<C : Cardio>(val db: C)
+```
+
+### Type Parameter
+
+<ParamField path="C" type="Cardio" required>
+  The Cardio database class type. Use `Cardio` for the base class or your custom subclass for type-safe repositories.
+</ParamField>
+
+## Creating a Repository
+
+Define a repository by extending `CardioRepository` and implementing data access methods:
+
+```kotlin
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    suspend fun findById(id: Int): User? {
+        return query("SELECT * FROM users WHERE id = $1", listOf(id)) { row ->
+            User(
+                id = row.getAs<Int>("id"),
+                name = row.getAs<String>("name")
+            )
+        }.firstOrNull()
+    }
+    
+    suspend fun create(name: String): Long {
+        return execute("INSERT INTO users (name) VALUES ($1)", listOf(name))
+    }
+}
+```
+
+## Protected Helper Methods
+
+`CardioRepository` provides protected methods for database operations:
+
+### query
+
+Execute SELECT queries with automatic transaction context:
+
+```kotlin
+protected suspend fun <T> query(
+    stmt: String,
+    args: List<Any?> = EmptyArgs,
+    transform: (Row) -> T
+): List<T>
+```
+
+**Example:**
+
+```kotlin
+suspend fun findActiveUsers(): List<User> {
+    return query("SELECT * FROM users WHERE active = $1", listOf(true)) { row ->
+        User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            active = row.getAs<Boolean>("active")
+        )
+    }
+}
+```
+
+### execute
+
+Execute INSERT, UPDATE, or DELETE statements:
+
+```kotlin
+protected suspend fun execute(
+    stmt: String,
+    args: List<Any?> = EmptyArgs
+): Long
+```
+
+**Example:**
+
+```kotlin
+suspend fun updateLastLogin(userId: Int): Long {
+    return execute(
+        "UPDATE users SET last_login = NOW() WHERE id = $1",
+        listOf(userId)
+    )
+}
+```
+
+### transaction
+
+Explicitly create a transaction for multiple operations:
+
+```kotlin
+protected suspend fun <T> transaction(block: suspend CardioTransaction.() -> T): T
+```
+
+**Example:**
+
+```kotlin
+suspend fun transferFunds(fromId: Int, toId: Int, amount: BigDecimal) {
+    transaction { tx ->
+        tx.execute(
+            "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+            listOf(amount, fromId)
+        )
+        tx.execute(
+            "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+            listOf(amount, toId)
+        )
+    }
+}
+```
+
+### tx
+
+Get the current transaction context or create a new connection:
+
+```kotlin
+protected suspend fun tx(): CardioTransaction
+```
+
+This method retrieves the current transaction from the coroutine context if one exists, or creates a new connection:
+
+```kotlin
+protected suspend fun tx(): CardioTransaction {
+    return when (val ctx = currentCoroutineContext()[CardioTransaction.Context]?.tx) {
+        null -> db.withConnection { connection ->
+            CardioTransaction(connection)
+        }
+        else -> ctx
+    }
+}
+```
+
+<Info>
+The `query` and `execute` methods automatically use `tx()` internally, so they participate in the current transaction if one exists.
+</Info>
+
+## Transaction Context Awareness
+
+Repository methods automatically participate in the current transaction when called from within `inTransaction` blocks:
+
+```kotlin
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    suspend fun create(name: String): Long {
+        return execute("INSERT INTO users (name) VALUES ($1)", listOf(name))
+    }
+    
+    suspend fun logAction(action: String): Long {
+        return execute("INSERT INTO audit_log (action) VALUES ($1)", listOf(action))
+    }
+}
+
+val userRepo = UserRepository(cardio)
+
+// Both operations run in the same transaction
+cardio.inTransaction {
+    userRepo.create("Alice")
+    userRepo.logAction("user_created")
+    // If logAction fails, create is also rolled back
+}
+```
+
+## Complete Example
+
+Here's a comprehensive repository with multiple data access methods:
+
+```kotlin
+data class User(
+    val id: Int,
+    val name: String,
+    val email: String,
+    val active: Boolean,
+    val createdAt: LocalDateTime
+)
+
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    
+    suspend fun findById(id: Int): User? {
+        return query(
+            "SELECT * FROM users WHERE id = $1",
+            listOf(id)
+        ) { row ->
+            mapUser(row)
+        }.firstOrNull()
+    }
+    
+    suspend fun findByEmail(email: String): User? {
+        return query(
+            "SELECT * FROM users WHERE email = $1",
+            listOf(email)
+        ) { row ->
+            mapUser(row)
+        }.firstOrNull()
+    }
+    
+    suspend fun findAll(limit: Int = 100, offset: Int = 0): List<User> {
+        return query(
+            "SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            listOf(limit, offset)
+        ) { row ->
+            mapUser(row)
+        }
+    }
+    
+    suspend fun create(name: String, email: String): Int {
+        return query(
+            "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+            listOf(name, email)
+        ) { row ->
+            row.getAs<Int>("id")
+        }.first()
+    }
+    
+    suspend fun update(id: Int, name: String, email: String): Long {
+        return execute(
+            "UPDATE users SET name = $1, email = $2 WHERE id = $3",
+            listOf(name, email, id)
+        )
+    }
+    
+    suspend fun deactivate(id: Int): Long {
+        return execute(
+            "UPDATE users SET active = false WHERE id = $1",
+            listOf(id)
+        )
+    }
+    
+    suspend fun delete(id: Int): Long {
+        return execute(
+            "DELETE FROM users WHERE id = $1",
+            listOf(id)
+        )
+    }
+    
+    suspend fun countActive(): Long {
+        return query(
+            "SELECT COUNT(*) as total FROM users WHERE active = true"
+        ) { row ->
+            row.getAs<Long>("total")
+        }.first()
+    }
+    
+    private fun mapUser(row: Row): User {
+        return User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            email = row.getAs<String>("email"),
+            active = row.getAs<Boolean>("active"),
+            createdAt = row.getAs<LocalDateTime>("created_at")
+        )
+    }
+}
+```
+
+## Type-Safe Repositories
+
+Use custom Cardio subclasses for type-safe repository dependencies:
+
+```kotlin
+// Custom database class
+class MyDb(pool: Pool) : Cardio(pool)
+
+// Type-safe repository
+class UserRepository(db: MyDb) : CardioRepository<MyDb>(db) {
+    suspend fun findById(id: Int): User? {
+        return query("SELECT * FROM users WHERE id = $1", listOf(id)) { row ->
+            User(
+                id = row.getAs<Int>("id"),
+                name = row.getAs<String>("name")
+            )
+        }.firstOrNull()
+    }
+}
+
+// Create database instance
+val db = Cardio.create<MyDb> {
+    url("postgres://user:password@localhost:5432/mydb")
+}
+
+// Create repository with type safety
+val userRepo = UserRepository(db)
+```
+
+<Info>
+Type-safe repositories ensure that all repositories in your application use the same database instance type, preventing accidental misuse.
+</Info>
+
+## Multi-Table Operations
+
+Use the `transaction` method for operations spanning multiple tables:
+
+```kotlin
+class OrderRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    
+    suspend fun createOrderWithItems(
+        customerId: Int,
+        items: List<OrderItemRequest>
+    ): Int = transaction { tx ->
+        // Create order
+        val orderId = tx.query(
+            "INSERT INTO orders (customer_id) VALUES ($1) RETURNING id",
+            listOf(customerId)
+        ) { row ->
+            row.getAs<Int>("id")
+        }.first()
+        
+        // Add items
+        for (item in items) {
+            tx.execute(
+                "INSERT INTO order_items (order_id, product_id, quantity) VALUES ($1, $2, $3)",
+                listOf(orderId, item.productId, item.quantity)
+            )
+        }
+        
+        orderId
+    }
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="One Repository Per Entity" icon="table">
+    Create a separate repository class for each main database entity
+  </Card>
+  <Card title="Extract Mapping Logic" icon="arrows-turn-to-dots">
+    Use private helper methods for row-to-object mapping
+  </Card>
+  <Card title="Use Type-Safe Repositories" icon="shield-check">
+    Extend Cardio for compile-time safety in larger applications
+  </Card>
+  <Card title="Keep Methods Focused" icon="bullseye">
+    Each repository method should have a single, clear purpose
+  </Card>
+</CardGroup>
+
+## Repository Organization
+
+Organize repositories in a dedicated package:
+
+```
+src/main/kotlin/
+  └── com/example/myapp/
+      ├── database/
+      │   └── MyDb.kt
+      └── repositories/
+          ├── UserRepository.kt
+          ├── OrderRepository.kt
+          └── ProductRepository.kt
+```
+
+## Testing Repositories
+
+Repositories are easy to test with a test database instance:
+
+```kotlin
+class UserRepositoryTest {
+    private lateinit var db: Cardio
+    private lateinit var userRepo: UserRepository
+    
+    @BeforeEach
+    fun setup() {
+        db = Cardio.create<Cardio> {
+            url("postgres://user:password@localhost:5432/test_db")
+        }
+        userRepo = UserRepository(db)
+    }
+    
+    @Test
+    fun `test create and find user`() = runBlocking {
+        val userId = userRepo.create("Alice", "alice@example.com")
+        val user = userRepo.findById(userId)
+        
+        assertNotNull(user)
+        assertEquals("Alice", user?.name)
+        assertEquals("alice@example.com", user?.email)
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/core/configuration">
+    Learn about custom Cardio subclasses and configuration
+  </Card>
+  <Card title="Transactions" icon="rotate" href="/core/transactions">
+    Understand transaction context and management
+  </Card>
+</CardGroup>

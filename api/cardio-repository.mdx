@@ -1,0 +1,229 @@
+---
+title: 'CardioRepository'
+description: 'Base repository class for building database access layers with transaction support'
+---
+
+## Overview
+
+The `CardioRepository<C : Cardio>` class provides a base implementation for creating repository patterns in your application. It offers protected methods for executing queries and managing transactions, designed to be extended by your custom repository classes.
+
+## Constructor
+
+```kotlin
+open class CardioRepository<C : Cardio>(val db: C)
+```
+
+<ParamField path="db" type="C : Cardio" required>
+  The Cardio database instance used by this repository. The generic type `C` must extend `Cardio`.
+</ParamField>
+
+## Protected Methods
+
+These methods are available to subclasses for implementing repository operations.
+
+### transaction
+
+Executes a block of code within a database transaction.
+
+```kotlin
+protected suspend fun <T> transaction(block: suspend CardioTransaction.() -> T): T
+```
+
+<ParamField path="block" type="suspend CardioTransaction.() -> T" required>
+  Suspend function executed within a transaction context. Automatically commits on success or rolls back on exception.
+</ParamField>
+
+**Returns:** `T` - The result returned by the block function.
+
+### tx
+
+Retrieves the current transaction context or creates a new connection.
+
+```kotlin
+protected suspend fun tx(): CardioTransaction
+```
+
+**Returns:** `CardioTransaction` - Either the current transaction from the coroutine context, or a new `CardioTransaction` with a fresh connection.
+
+### query
+
+Executes a SQL query and transforms the results using the provided function.
+
+```kotlin
+protected suspend fun <T> query(
+    stmt: String,
+    args: List<Any?> = EmptyArgs,
+    transform: (Row) -> T
+): List<T>
+```
+
+<ParamField path="stmt" type="String" required>
+  SQL query statement. Use `$1`, `$2`, etc. for parameter placeholders.
+</ParamField>
+
+<ParamField path="args" type="List<Any?>" default="EmptyArgs">
+  List of query parameters corresponding to the placeholders in the statement.
+</ParamField>
+
+<ParamField path="transform" type="(Row) -> T" required>
+  Lambda function that transforms each result row into type `T`.
+</ParamField>
+
+**Returns:** `List<T>` - List of transformed results, one for each row returned by the query.
+
+### execute
+
+Executes a SQL statement (INSERT, UPDATE, DELETE) and returns the number of affected rows.
+
+```kotlin
+protected suspend fun execute(
+    stmt: String,
+    args: List<Any?> = EmptyArgs
+): Long
+```
+
+<ParamField path="stmt" type="String" required>
+  SQL statement to execute. Use `$1`, `$2`, etc. for parameter placeholders.
+</ParamField>
+
+<ParamField path="args" type="List<Any?>" default="EmptyArgs">
+  List of statement parameters corresponding to the placeholders.
+</ParamField>
+
+**Returns:** `Long` - The number of rows affected by the statement.
+
+## Usage
+
+### Creating a Custom Repository
+
+```kotlin
+import io.github.blad3mak3r.cardio.postgres.Cardio
+import io.github.blad3mak3r.cardio.postgres.CardioRepository
+
+data class User(val id: Int, val name: String, val email: String)
+
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    
+    suspend fun findById(id: Int): User? {
+        return query(
+            stmt = "SELECT id, name, email FROM users WHERE id = $1",
+            args = listOf(id)
+        ) { row ->
+            User(
+                id = row.getInteger("id"),
+                name = row.getString("name"),
+                email = row.getString("email")
+            )
+        }.firstOrNull()
+    }
+    
+    suspend fun findAll(): List<User> {
+        return query(
+            stmt = "SELECT id, name, email FROM users"
+        ) { row ->
+            User(
+                id = row.getInteger("id"),
+                name = row.getString("name"),
+                email = row.getString("email")
+            )
+        }
+    }
+    
+    suspend fun create(name: String, email: String): Int {
+        return query(
+            stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+            args = listOf(name, email)
+        ) { row ->
+            row.getInteger("id")
+        }.first()
+    }
+    
+    suspend fun update(id: Int, name: String, email: String): Long {
+        return execute(
+            stmt = "UPDATE users SET name = $1, email = $2 WHERE id = $3",
+            args = listOf(name, email, id)
+        )
+    }
+    
+    suspend fun delete(id: Int): Long {
+        return execute(
+            stmt = "DELETE FROM users WHERE id = $1",
+            args = listOf(id)
+        )
+    }
+}
+```
+
+### Using the Repository
+
+```kotlin
+suspend fun main() {
+    val cardio = Cardio.create<Cardio> { /* config */ }
+    val userRepo = UserRepository(cardio)
+    
+    // Create a user
+    val userId = userRepo.create("John Doe", "john@example.com")
+    
+    // Find a user
+    val user = userRepo.findById(userId)
+    println("User: $user")
+    
+    // Update a user
+    userRepo.update(userId, "Jane Doe", "jane@example.com")
+    
+    // Get all users
+    val allUsers = userRepo.findAll()
+    println("All users: $allUsers")
+    
+    // Delete a user
+    userRepo.delete(userId)
+}
+```
+
+### Using Transactions
+
+```kotlin
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    
+    suspend fun transferBalance(fromId: Int, toId: Int, amount: Int) {
+        transaction {
+            // Both operations happen in the same transaction
+            execute(
+                "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+                listOf(amount, fromId)
+            )
+            
+            execute(
+                "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+                listOf(amount, toId)
+            )
+        }
+    }
+}
+```
+
+## Transaction Context
+
+The `tx()` method is context-aware. When called from within a `transaction` block, it returns the current transaction. When called outside a transaction, it creates a new connection. This allows repository methods to work both independently and as part of larger transactions.
+
+```kotlin
+class OrderRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    
+    // Can be called independently or within a transaction
+    suspend fun createOrder(userId: Int, total: Double): Int {
+        return query(
+            "INSERT INTO orders (user_id, total) VALUES ($1, $2) RETURNING id",
+            listOf(userId, total)
+        ) { row -> row.getInteger("id") }.first()
+    }
+}
+
+// Called independently - uses its own connection
+val orderId = orderRepo.createOrder(userId, 100.0)
+
+// Called within a transaction - shares the transaction
+cardio.inTransaction {
+    val orderId = orderRepo.createOrder(userId, 100.0)
+    orderRepo.addOrderItem(orderId, productId, quantity)
+}
+```

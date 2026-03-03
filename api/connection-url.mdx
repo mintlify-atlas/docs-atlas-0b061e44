@@ -1,0 +1,236 @@
+---
+title: Connection URL
+description: Utilities for parsing PostgreSQL connection URLs
+---
+
+## Overview
+
+Cardio provides utilities to parse standard PostgreSQL connection URLs into Vert.x `PgConnectOptions`, allowing you to configure database connections using familiar URL syntax.
+
+## Functions
+
+### url
+
+Parses a PostgreSQL connection URL and applies it to the Cardio configuration.
+
+```kotlin
+fun Cardio.Configuration.url(connectionUrl: String)
+```
+
+<ParamField path="connectionUrl" type="String" required>
+  A PostgreSQL connection URL in the standard format
+</ParamField>
+
+This extension function is used within the Cardio configuration block to set connection options from a URL.
+
+#### Example
+
+```kotlin
+val cardio = Cardio.create<MyDatabase> {
+    url("postgres://user:secret@localhost:5432/mydb")
+}
+
+// With SSL enabled
+val cardio = Cardio.create<MyDatabase> {
+    url("postgres://admin:pass123@db.example.com:5432/production?sslmode=require")
+}
+
+// Minimal URL with defaults
+val cardio = Cardio.create<MyDatabase> {
+    url("postgres://localhost/mydb")
+}
+```
+
+### pgConnectOptionsFromUrl
+
+Parses a PostgreSQL connection URL into a `PgConnectOptions` instance.
+
+```kotlin
+fun pgConnectOptionsFromUrl(connectionUrl: String): PgConnectOptions
+```
+
+<ParamField path="connectionUrl" type="String" required>
+  A URL of the form `postgres://[user[:password]@]host[:port][/database][?param=value&...]`
+</ParamField>
+
+**Returns:** A configured `PgConnectOptions` instance
+
+**Throws:** `IllegalArgumentException` if the URL scheme is not `postgres` or `postgresql`
+
+This function provides lower-level access to URL parsing if you need to manually configure `PgConnectOptions`.
+
+#### Example
+
+```kotlin
+import io.github.blad3mak3r.cardio.postgres.pgConnectOptionsFromUrl
+
+val options = pgConnectOptionsFromUrl("postgresql://user:pass@localhost:5432/mydb")
+
+// Customize the options further
+options.apply {
+    connectTimeout = 10000
+    idleTimeout = 30000
+}
+
+// Use with Cardio
+val cardio = Cardio.create<MyDatabase> {
+    connectOptions = options
+}
+```
+
+## URL Format
+
+### Syntax
+
+```
+postgres://[user[:password]@]host[:port][/database][?param=value&...]
+postgresql://[user[:password]@]host[:port][/database][?param=value&...]
+```
+
+### Components
+
+<ParamField path="scheme" type="String" required>
+  Must be either `postgres` or `postgresql`
+</ParamField>
+
+<ParamField path="user" type="String">
+  The database username. Defaults to the system's default if not specified
+</ParamField>
+
+<ParamField path="password" type="String">
+  The database password. Optional if authentication is not required
+</ParamField>
+
+<ParamField path="host" type="String">
+  The database server hostname or IP address. Defaults to `localhost` if not specified
+</ParamField>
+
+<ParamField path="port" type="Int">
+  The database server port. Defaults to `5432` if not specified
+</ParamField>
+
+<ParamField path="database" type="String">
+  The name of the database to connect to. Optional
+</ParamField>
+
+<ParamField path="query parameters" type="String">
+  Optional query string parameters for additional configuration
+</ParamField>
+
+### Query Parameters
+
+Query parameter keys are case-insensitive, but values are case-sensitive.
+
+#### sslmode
+
+Controls SSL/TLS connection behavior.
+
+<ParamField path="sslmode" type="String">
+  SSL mode for the connection. Supported values:
+  - `disable` - Do not use SSL
+  - `allow` - Try non-SSL first, then SSL
+  - `prefer` - Try SSL first, then non-SSL (default)
+  - `require` - Require SSL, but don't verify certificate
+  - `verify-ca` - Require SSL and verify certificate authority
+  - `verify-full` - Require SSL and verify certificate and hostname
+</ParamField>
+
+## Examples
+
+### Basic Connection
+
+```kotlin
+// Minimal URL - uses defaults for host (localhost) and port (5432)
+val cardio = Cardio.create<MyDb> {
+    url("postgres://localhost/mydb")
+}
+```
+
+### With Authentication
+
+```kotlin
+// Include username and password
+val cardio = Cardio.create<MyDb> {
+    url("postgres://dbuser:secretpass@db.example.com:5432/production")
+}
+```
+
+### With SSL Required
+
+```kotlin
+// Require SSL connection
+val cardio = Cardio.create<MyDb> {
+    url("postgres://user:pass@secure-db.example.com:5432/mydb?sslmode=require")
+}
+```
+
+### Full Verification
+
+```kotlin
+// Require SSL with full certificate verification
+val cardio = Cardio.create<MyDb> {
+    url("postgres://admin:secret@prod-db.company.com:5432/app_db?sslmode=verify-full")
+}
+```
+
+### Using Environment Variables
+
+```kotlin
+// Load connection URL from environment
+val databaseUrl = System.getenv("DATABASE_URL") 
+    ?: "postgres://localhost:5432/dev_db"
+
+val cardio = Cardio.create<MyDb> {
+    url(databaseUrl)
+}
+```
+
+### Alternative Scheme
+
+```kotlin
+// Both 'postgres' and 'postgresql' schemes are supported
+val cardio = Cardio.create<MyDb> {
+    url("postgresql://user:pass@localhost/mydb")
+}
+```
+
+## Error Handling
+
+The URL parser will throw an `IllegalArgumentException` if:
+
+- The scheme is not `postgres` or `postgresql`
+- The URL format is invalid
+
+```kotlin
+try {
+    val cardio = Cardio.create<MyDb> {
+        url("mysql://localhost/mydb") // Wrong scheme!
+    }
+} catch (e: IllegalArgumentException) {
+    println("Invalid URL: ${e.message}")
+    // Output: Unsupported scheme 'mysql'. Expected 'postgres' or 'postgresql'.
+}
+```
+
+## Best Practices
+
+1. **Use environment variables**: Store connection URLs in environment variables to avoid hardcoding credentials.
+
+2. **Enable SSL in production**: Always use `sslmode=require` or higher for production databases.
+
+3. **Validate URLs early**: Test connection URL parsing during application startup to catch configuration errors.
+
+4. **Use the url() extension**: Prefer the `Configuration.url()` extension over manually calling `pgConnectOptionsFromUrl()` for cleaner code.
+
+```kotlin
+// Good: Clean and idiomatic
+val cardio = Cardio.create<MyDb> {
+    url(System.getenv("DATABASE_URL"))
+}
+
+// Avoid: More verbose
+val options = pgConnectOptionsFromUrl(System.getenv("DATABASE_URL"))
+val cardio = Cardio.create<MyDb> {
+    connectOptions = options
+}
+```

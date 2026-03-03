@@ -1,0 +1,270 @@
+---
+title: 'Extending Cardio'
+description: 'Create custom database classes for strongly-typed repositories'
+---
+
+## Overview
+
+The `Cardio` class is designed to be extended, allowing you to create custom database contexts tailored to your application. This pattern enables strongly-typed repositories that depend on your specific database class, providing better type safety and organization.
+
+## Why Extend Cardio?
+
+Extending the `Cardio` class offers several benefits:
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield-check">
+    Repositories can require your specific database type, preventing accidental mixing of database contexts
+  </Card>
+  <Card title="Encapsulation" icon="box">
+    Bundle database-specific configuration and logic in a single class
+  </Card>
+  <Card title="Testability" icon="flask">
+    Easier to mock and test with strongly-typed dependencies
+  </Card>
+  <Card title="Organization" icon="folder-tree">
+    Clear separation between different database contexts in multi-database applications
+  </Card>
+</CardGroup>
+
+## Basic Extension
+
+Create a custom database class by extending `Cardio`:
+
+```kotlin
+class MyDb(pool: Pool) : Cardio(pool)
+```
+
+<Note>
+Your custom class must have a constructor that accepts a `Pool` parameter, which will be automatically injected by the `create<T>` method.
+</Note>
+
+## Creating an Instance
+
+Use the generic `create<T>` method to instantiate your custom database:
+
+```kotlin
+val myDb = Cardio.create<MyDb> {
+    url("postgres://user:password@localhost:5432/my_database?sslmode=disable")
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
+}
+```
+
+### How create&lt;T&gt; Works
+
+The `create<T>` method uses reflection to instantiate your custom `Cardio` subclass:
+
+```kotlin
+val c = T::class.java.getDeclaredConstructor(Pool::class.java)
+    .apply { isAccessible = true }
+    .newInstance(pool)
+```
+
+Source reference: `Cardio.kt:32-34`
+
+This approach:
+1. Looks up the constructor that accepts a `Pool` parameter
+2. Makes it accessible (even if private)
+3. Creates a new instance with the configured connection pool
+4. Automatically tests the connection and logs the PostgreSQL version
+
+<Info>
+The `create<T>` method is `inline` with a `reified` type parameter, allowing it to work with any `Cardio` subclass without explicit class references.
+</Info>
+
+## Strongly-Typed Repositories
+
+Once you have a custom database class, create repositories that depend on it:
+
+```kotlin
+class MyRepo(db: MyDb) : CardioRepository<MyDb>(db) {
+    suspend fun customOperation() {
+        query("SELECT * FROM my_table") { row ->
+            // Map rows
+        }
+    }
+}
+```
+
+Now your repository is tightly coupled to `MyDb`, preventing accidental use with other database instances:
+
+```kotlin
+val myRepo = MyRepo(myDb) // ✓ Type-safe
+
+val otherDb = Cardio.create<OtherDb> { /* ... */ }
+val myRepo2 = MyRepo(otherDb) // ✗ Compile error!
+```
+
+## Complete Example
+
+Here's a full example showing the pattern in practice:
+
+```kotlin
+import io.github.blad3mak3r.cardio.postgres.Cardio
+import io.github.blad3mak3r.cardio.postgres.CardioRepository
+import io.github.blad3mak3r.cardio.postgres.getAs
+import io.vertx.sqlclient.Pool
+import io.vertx.sqlclient.PoolOptions
+
+// 1. Define your custom database class
+class MyDb(pool: Pool) : Cardio(pool)
+
+// 2. Define your domain model
+data class User(
+    val id: Int,
+    val name: String,
+    val email: String
+)
+
+// 3. Create a repository that requires MyDb
+class UserRepository(db: MyDb) : CardioRepository<MyDb>(db) {
+    suspend fun findById(id: Int): User? {
+        return query("SELECT * FROM users WHERE id = $1", listOf(id)) { row ->
+            User(
+                id = row.getAs("id"),
+                name = row.getAs("name"),
+                email = row.getAs("email")
+            )
+        }.firstOrNull()
+    }
+    
+    suspend fun findAll(): List<User> {
+        return query("SELECT * FROM users") { row ->
+            User(
+                id = row.getAs("id"),
+                name = row.getAs("name"),
+                email = row.getAs("email")
+            )
+        }
+    }
+    
+    suspend fun create(name: String, email: String): Long {
+        return execute(
+            "INSERT INTO users (name, email) VALUES ($1, $2)",
+            listOf(name, email)
+        )
+    }
+}
+
+// 4. Initialize and use
+suspend fun main() {
+    val myDb = Cardio.create<MyDb> {
+        url("postgres://user:password@localhost:5432/my_database?sslmode=disable")
+        poolOptions = PoolOptions().apply {
+            maxSize = 10
+        }
+    }
+    
+    val userRepo = UserRepository(myDb)
+    
+    // Use the repository
+    val user = userRepo.findById(1)
+    println("User: $user")
+    
+    val allUsers = userRepo.findAll()
+    println("All users: $allUsers")
+}
+```
+
+## Multiple Database Contexts
+
+When working with multiple databases, custom classes prevent confusion:
+
+```kotlin
+class PrimaryDb(pool: Pool) : Cardio(pool)
+class AnalyticsDb(pool: Pool) : Cardio(pool)
+
+class UserRepository(db: PrimaryDb) : CardioRepository<PrimaryDb>(db) {
+    // User operations
+}
+
+class EventRepository(db: AnalyticsDb) : CardioRepository<AnalyticsDb>(db) {
+    // Analytics operations
+}
+
+// Clear separation
+val primaryDb = Cardio.create<PrimaryDb> { /* ... */ }
+val analyticsDb = Cardio.create<AnalyticsDb> { /* ... */ }
+
+val userRepo = UserRepository(primaryDb)
+val eventRepo = EventRepository(analyticsDb)
+```
+
+## Adding Custom Methods
+
+Extend your database class with custom functionality:
+
+```kotlin
+class MyDb(pool: Pool) : Cardio(pool) {
+    
+    // Custom helper for common queries
+    suspend fun <T> queryTable(
+        table: String,
+        where: String,
+        params: List<Any>,
+        mapper: (Row) -> T
+    ): List<T> {
+        return inTransaction { tx ->
+            tx.query("SELECT * FROM $table WHERE $where", params, mapper)
+        }
+    }
+    
+    // Health check method
+    suspend fun healthCheck(): Boolean {
+        return try {
+            inTransaction { tx ->
+                tx.query("SELECT 1") { it.getInteger(0) }
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+}
+```
+
+## Testing with Custom Types
+
+Strongly-typed databases simplify testing:
+
+```kotlin
+class TestDb(pool: Pool) : Cardio(pool)
+
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    // Repository implementation
+}
+
+@Test
+fun `test user repository`() = runBlocking {
+    val testDb = Cardio.create<TestDb> {
+        url("postgres://test:test@localhost:5432/test_db")
+    }
+    
+    val repo = UserRepository(testDb)
+    
+    // Test operations
+    val userId = repo.create("Test User", "test@example.com")
+    val user = repo.findById(userId)
+    
+    assertEquals("Test User", user?.name)
+}
+```
+
+## Benefits Recap
+
+<Accordion title="Type Safety">
+Repositories that extend `CardioRepository<MyDb>` can only be instantiated with `MyDb` instances, preventing runtime errors from using the wrong database context.
+</Accordion>
+
+<Accordion title="Reflection-Based Instantiation">
+The `create<T>` method handles all the reflection boilerplate, automatically finding and invoking your constructor with the configured pool.
+</Accordion>
+
+<Accordion title="Clean Architecture">
+Separating database contexts promotes clean architecture principles and makes your codebase more maintainable.
+</Accordion>
+
+<Tip>
+While extending `Cardio` is optional, it's highly recommended for production applications with multiple repositories or complex database interactions.
+</Tip>

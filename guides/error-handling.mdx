@@ -1,0 +1,500 @@
+---
+title: 'Error Handling'
+description: 'Handle database errors, transactions, and failures gracefully'
+---
+
+## Overview
+
+Cardio provides built-in error handling mechanisms for database operations, including automatic transaction rollback, connection error handling, and null safety. Understanding these patterns will help you build robust applications.
+
+## Transaction Error Handling
+
+Cardio's `inTransaction` method automatically handles transaction lifecycle and rollback on errors.
+
+### Automatic Rollback
+
+When an exception occurs within a transaction, Cardio automatically rolls back all changes:
+
+```kotlin
+cardio.inTransaction { tx ->
+    tx.execute("INSERT INTO users (name) VALUES ($1)", listOf("Alice"))
+    tx.execute("INSERT INTO orders (user_id) VALUES ($1)", listOf(999))
+    // If second insert fails, first insert is automatically rolled back
+}
+```
+
+Source reference: `Cardio.kt:51-67`
+
+### Under the Hood
+
+Here's how Cardio manages transaction errors:
+
+```kotlin
+suspend fun <T> inTransaction(block: suspend CardioTransaction.() -> T): T {
+    return withConnection { conn ->
+        val tx = conn.begin().coAwait()
+        val cardioTx = CardioTransaction(conn)
+        try {
+            val result = withContext(CardioTransaction.Context(cardioTx)) {
+                cardioTx.block()
+            }
+            tx.commit().coAwait()
+            result
+        } catch (e: Exception) {
+            tx.rollback().coAwait()
+            logger.error("Transaction rolled back due to error", e)
+            throw e
+        }
+    }
+}
+```
+
+Key points:
+1. Transaction begins before executing your code
+2. On success, changes are committed
+3. On any exception, transaction is rolled back
+4. Error is logged and re-thrown
+5. Connection is automatically closed
+
+<Info>
+All exceptions are logged using SLF4J before being re-thrown, providing visibility into transaction failures.
+</Info>
+
+## Handling Null Columns
+
+Cardio provides two approaches for handling potentially null columns.
+
+### Using getAs() - Fail Fast
+
+Use `getAs()` when a column should never be null. This provides early failure detection:
+
+```kotlin
+try {
+    val user = tx.query("SELECT id, name FROM users WHERE id = $1", listOf(1)) { row ->
+        User(
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name") // Throws if null
+        )
+    }.firstOrNull()
+} catch (e: IllegalStateException) {
+    logger.error("Unexpected null value in required field", e)
+    // Handle the error
+}
+```
+
+<Warning>
+`getAs()` throws `IllegalStateException` with message "Column 'column_name' is null" when encountering null values.
+</Warning>
+
+### Using getAsNullable() - Graceful Handling
+
+Use `getAsNullable()` for columns that are legitimately optional:
+
+```kotlin
+val users = tx.query("SELECT id, name, middle_name, last_login FROM users") { row ->
+    User(
+        id = row.getAs<Int>("id"),
+        name = row.getAs<String>("name"),
+        middleName = row.getAsNullable<String>("middle_name"), // Returns null safely
+        lastLogin = row.getAsNullable<LocalDateTime>("last_login")
+    )
+}
+```
+
+## Connection Errors
+
+### Initial Connection Failures
+
+When `Cardio.create()` fails to connect, it throws an exception:
+
+```kotlin
+try {
+    val cardio = Cardio.create<Cardio> {
+        url("postgres://user:wrongpass@localhost:5432/mydb")
+    }
+} catch (e: Exception) {
+    logger.error("Failed to connect to database", e)
+    // Handle connection failure
+    // - Retry with exponential backoff
+    // - Fall back to cached data
+    // - Alert operations team
+}
+```
+
+### Connection Verification
+
+Cardio automatically verifies the connection on startup by querying the PostgreSQL version:
+
+```kotlin
+val version = c.inTransaction {
+    query(stmt = "SELECT version()") { row ->
+        row.getString("version")
+    }.first()
+}
+logger.info("Connected to Postgres version: $version")
+```
+
+Source reference: `Cardio.kt:36-42`
+
+If this verification fails, the exception is propagated to the caller.
+
+### Runtime Connection Issues
+
+Handle connection pool exhaustion and network issues:
+
+```kotlin
+try {
+    cardio.inTransaction { tx ->
+        // Database operations
+    }
+} catch (e: Exception) {
+    when {
+        e.message?.contains("connection", ignoreCase = true) == true -> {
+            logger.error("Connection error", e)
+            // Retry logic or fallback
+        }
+        e.message?.contains("timeout", ignoreCase = true) == true -> {
+            logger.error("Connection timeout", e)
+            // Increase timeout or alert
+        }
+        else -> {
+            logger.error("Database error", e)
+            throw e
+        }
+    }
+}
+```
+
+## Query Errors
+
+### SQL Syntax Errors
+
+Handle invalid SQL statements:
+
+```kotlin
+try {
+    val result = cardio.inTransaction { tx ->
+        tx.query("SELEKT * FROM users") { row -> /* ... */ } // Typo
+    }
+} catch (e: Exception) {
+    logger.error("SQL syntax error", e)
+    // Log the error with context
+    // Return appropriate error response to client
+}
+```
+
+### Constraint Violations
+
+Handle database constraint violations:
+
+```kotlin
+try {
+    cardio.inTransaction { tx ->
+        tx.execute(
+            "INSERT INTO users (id, email) VALUES ($1, $2)",
+            listOf(1, "user@example.com")
+        )
+    }
+} catch (e: Exception) {
+    when {
+        e.message?.contains("unique constraint", ignoreCase = true) == true -> {
+            logger.warn("Duplicate email address", e)
+            // Return user-friendly error
+        }
+        e.message?.contains("foreign key", ignoreCase = true) == true -> {
+            logger.warn("Invalid foreign key reference", e)
+            // Return validation error
+        }
+        else -> {
+            logger.error("Database constraint error", e)
+            throw e
+        }
+    }
+}
+```
+
+## Best Practices
+
+### 1. Always Use Transactions
+
+Wrap related operations in transactions to ensure consistency:
+
+```kotlin
+// ✓ Good - Atomic operation
+cardio.inTransaction { tx ->
+    val userId = tx.execute(
+        "INSERT INTO users (name) VALUES ($1) RETURNING id",
+        listOf("Alice")
+    )
+    tx.execute(
+        "INSERT INTO user_settings (user_id) VALUES ($1)",
+        listOf(userId)
+    )
+}
+
+// ✗ Bad - Non-atomic, no rollback
+val userId = cardio.withConnection { conn ->
+    // Manually execute without transaction
+}
+```
+
+### 2. Log Errors with Context
+
+Include relevant context when logging errors:
+
+```kotlin
+try {
+    cardio.inTransaction { tx ->
+        tx.execute(
+            "INSERT INTO orders (user_id, amount) VALUES ($1, $2)",
+            listOf(userId, amount)
+        )
+    }
+} catch (e: Exception) {
+    logger.error(
+        "Failed to create order for user=$userId, amount=$amount",
+        e
+    )
+    throw e
+}
+```
+
+Cardio automatically logs transaction rollbacks with the exception:
+
+```
+logger.error("Transaction rolled back due to error", e)
+```
+
+Source reference: `Cardio.kt:63`
+
+### 3. Use Appropriate Nullability
+
+Choose the right method based on your schema:
+
+```kotlin
+// ✓ Good - Matches schema expectations
+data class User(
+    val id: Int,              // NOT NULL in DB
+    val name: String,          // NOT NULL in DB
+    val middleName: String?,   // NULL in DB
+    val lastLogin: LocalDateTime? // NULL in DB
+)
+
+val user = tx.query("SELECT * FROM users WHERE id = $1", listOf(1)) { row ->
+    User(
+        id = row.getAs("id"),                          // Required
+        name = row.getAs("name"),                      // Required
+        middleName = row.getAsNullable("middle_name"), // Optional
+        lastLogin = row.getAsNullable("last_login")   // Optional
+    )
+}.firstOrNull()
+```
+
+### 4. Implement Retry Logic
+
+For transient failures, implement retry with exponential backoff:
+
+```kotlin
+suspend fun <T> withRetry(
+    maxAttempts: Int = 3,
+    initialDelay: Long = 100,
+    maxDelay: Long = 1000,
+    factor: Double = 2.0,
+    block: suspend () -> T
+): T {
+    var currentDelay = initialDelay
+    repeat(maxAttempts - 1) { attempt ->
+        try {
+            return block()
+        } catch (e: Exception) {
+            logger.warn("Attempt ${attempt + 1} failed, retrying...", e)
+        }
+        delay(currentDelay)
+        currentDelay = (currentDelay * factor).toLong().coerceAtMost(maxDelay)
+    }
+    return block() // Last attempt without catching
+}
+
+// Usage
+val result = withRetry {
+    cardio.inTransaction { tx ->
+        // Database operations
+    }
+}
+```
+
+### 5. Clean Up Resources
+
+Cardio automatically manages connections, but always close the pool when shutting down:
+
+```kotlin
+class Application {
+    private val cardio = Cardio.create<Cardio> {
+        url("postgres://localhost:5432/mydb")
+    }
+    
+    suspend fun start() {
+        // Application logic
+    }
+    
+    suspend fun shutdown() {
+        try {
+            cardio.pool.close().coAwait()
+            logger.info("Database connection pool closed")
+        } catch (e: Exception) {
+            logger.error("Error closing connection pool", e)
+        }
+    }
+}
+```
+
+## Error Recovery Patterns
+
+### Circuit Breaker
+
+Implement circuit breaker pattern for database operations:
+
+```kotlin
+class DatabaseCircuitBreaker(
+    private val failureThreshold: Int = 5,
+    private val timeout: Duration = Duration.ofSeconds(60)
+) {
+    private var failureCount = 0
+    private var lastFailureTime: Instant? = null
+    private var state = State.CLOSED
+    
+    enum class State { CLOSED, OPEN, HALF_OPEN }
+    
+    suspend fun <T> execute(block: suspend () -> T): T {
+        when (state) {
+            State.OPEN -> {
+                if (Duration.between(lastFailureTime, Instant.now()) > timeout) {
+                    state = State.HALF_OPEN
+                } else {
+                    throw Exception("Circuit breaker is OPEN")
+                }
+            }
+            State.HALF_OPEN -> {
+                // Allow one request through
+            }
+            State.CLOSED -> {
+                // Normal operation
+            }
+        }
+        
+        return try {
+            val result = block()
+            reset()
+            result
+        } catch (e: Exception) {
+            recordFailure()
+            throw e
+        }
+    }
+    
+    private fun recordFailure() {
+        failureCount++
+        lastFailureTime = Instant.now()
+        if (failureCount >= failureThreshold) {
+            state = State.OPEN
+            logger.warn("Circuit breaker opened after $failureCount failures")
+        }
+    }
+    
+    private fun reset() {
+        failureCount = 0
+        state = State.CLOSED
+    }
+}
+```
+
+### Fallback Strategies
+
+Provide fallback options when database operations fail:
+
+```kotlin
+suspend fun getUser(id: Int): User? {
+    return try {
+        cardio.inTransaction { tx ->
+            tx.query("SELECT * FROM users WHERE id = $1", listOf(id)) { row ->
+                User(
+                    id = row.getAs("id"),
+                    name = row.getAs("name")
+                )
+            }.firstOrNull()
+        }
+    } catch (e: Exception) {
+        logger.error("Failed to fetch user from database, using cache", e)
+        // Fallback to cache
+        cache.get("user:$id")
+    }
+}
+```
+
+## Logging Configuration
+
+Cardio uses SLF4J for logging. Configure your logging framework to capture database errors:
+
+<CodeGroup>
+```xml Logback
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- Cardio logging -->
+    <logger name="io.github.blad3mak3r.cardio" level="INFO" />
+    
+    <!-- Vert.x PG Client logging -->
+    <logger name="io.vertx.pgclient" level="DEBUG" />
+    
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>
+```
+
+```properties Log4j2
+appender.console.type = Console
+appender.console.name = STDOUT
+appender.console.layout.type = PatternLayout
+appender.console.layout.pattern = %d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n
+
+# Cardio logging
+logger.cardio.name = io.github.blad3mak3r.cardio
+logger.cardio.level = info
+
+# Vert.x PG Client logging
+logger.vertx.name = io.vertx.pgclient
+logger.vertx.level = debug
+
+rootLogger.level = info
+rootLogger.appenderRef.stdout.ref = STDOUT
+```
+</CodeGroup>
+
+<Tip>
+Enable DEBUG logging for `io.vertx.pgclient` during development to see detailed SQL statements and connection pool activity.
+</Tip>
+
+## Summary
+
+<AccordionGroup>
+  <Accordion title="Transaction Management">
+    Cardio automatically rolls back transactions on exceptions and logs errors. Always wrap related operations in `inTransaction` blocks.
+  </Accordion>
+  
+  <Accordion title="Null Safety">
+    Use `getAs()` for required fields and `getAsNullable()` for optional fields. This provides type-safe null handling at the mapping layer.
+  </Accordion>
+  
+  <Accordion title="Connection Handling">
+    Cardio verifies connections on startup and automatically manages the connection pool. Implement retry logic for transient failures.
+  </Accordion>
+  
+  <Accordion title="Error Logging">
+    All transaction rollbacks are automatically logged. Add contextual logging in your application code for better observability.
+  </Accordion>
+</AccordionGroup>

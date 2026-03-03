@@ -1,0 +1,79 @@
+---
+title: Introduction
+description: A lightweight Kotlin library for reactive PostgreSQL database access with coroutines
+---
+
+# Cardio
+
+Cardio is a lightweight Kotlin library designed to simplify interaction with PostgreSQL databases using Vert.x PG Client reactively and with coroutines.
+
+Built on top of Vert.x PG Client, Cardio provides a clean, idiomatic Kotlin API that embraces reactive programming patterns while maintaining the simplicity and readability that Kotlin developers expect.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Reactive & Non-Blocking" icon="bolt">
+    Built on Vert.x PG Client for high-performance, non-blocking database operations
+  </Card>
+  <Card title="Coroutines Support" icon="code">
+    API designed to work seamlessly with Kotlin Coroutines for clean, readable async code
+  </Card>
+  <Card title="Transaction Management" icon="rotate">
+    Simple transaction handling with `inTransaction` blocks that automatically commit or rollback
+  </Card>
+  <Card title="Repository Pattern" icon="database">
+    `CardioRepository` base class for structuring clean, maintainable data access logic
+  </Card>
+  <Card title="Connection Pooling" icon="server">
+    Automatic connection pool management with configurable pool options
+  </Card>
+  <Card title="Type-Safe Queries" icon="shield-check">
+    Extension methods for type-safe data retrieval with `getAs<T>()` and `getAsNullable<T>()`
+  </Card>
+</CardGroup>
+
+## Quick Navigation
+
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add Cardio to your project with Gradle or Maven
+  </Card>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get up and running with Cardio in minutes
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/cardio">
+    Complete API documentation for all classes and methods
+  </Card>
+</CardGroup>
+
+## Why Cardio?
+
+Cardio provides a lightweight alternative to traditional blocking JDBC drivers and more complex reactive solutions. It sits on top of Vert.x PG Client, which is a reactive PostgreSQL client based on the PostgreSQL wire protocol, providing:
+
+- **Better Performance**: Non-blocking I/O means your application can handle more concurrent connections with fewer threads
+- **Kotlin-First Design**: Built specifically for Kotlin, with coroutines as a first-class citizen
+- **Simple API**: Clean, minimal surface area that's easy to learn and use
+- **Production Ready**: Built on battle-tested Vert.x technology used in production by thousands of companies
+
+### Comparison to Alternatives
+
+While similar to R2DBC in philosophy (reactive database access), Cardio is specifically designed for PostgreSQL and built on Vert.x rather than R2DBC's SPI. This focused approach allows for:
+
+- Tighter integration with the PostgreSQL protocol
+- Simpler API surface without the abstraction overhead of multi-database support
+- Direct access to PostgreSQL-specific features when needed
+- Better performance through Vert.x's proven event loop architecture
+
+## Next Steps
+
+<Steps>
+  <Step title="Install Cardio">
+    Add the dependency to your project using [Gradle or Maven](/installation)
+  </Step>
+  <Step title="Follow the Quick Start">
+    Learn the basics with our [Quick Start Guide](/quickstart)
+  </Step>
+  <Step title="Explore the Docs">
+    Dive deeper into [Configuration](/core/configuration) and [Queries](/core/queries)
+  </Step>
+</Steps>

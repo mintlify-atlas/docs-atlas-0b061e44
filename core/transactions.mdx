@@ -1,0 +1,287 @@
+---
+title: Transactions
+description: Manage database transactions with automatic rollback and nested transaction contexts
+---
+
+## Overview
+
+Cardio provides simple and safe transaction management with automatic rollback on exceptions. All database operations should be executed within transaction blocks to ensure data consistency.
+
+## inTransaction Method
+
+The `inTransaction` method creates a transactional context for executing database operations:
+
+```kotlin
+suspend fun <T> inTransaction(block: suspend CardioTransaction.() -> T): T
+```
+
+### Basic Usage
+
+```kotlin
+val result = cardio.inTransaction { tx ->
+    // All operations here run in a single transaction
+    val users = tx.query("SELECT * FROM users") { row ->
+        User(row.getAs<Int>("id"), row.getAs<String>("name"))
+    }
+    
+    tx.execute("UPDATE users SET last_checked = NOW()")
+    
+    users
+}
+```
+
+## Automatic Rollback
+
+If any exception occurs within the transaction block, Cardio automatically rolls back all changes:
+
+```kotlin
+try {
+    cardio.inTransaction { tx ->
+        tx.execute("INSERT INTO users (name) VALUES ($1)", listOf("Alice"))
+        tx.execute("INSERT INTO users (name) VALUES ($1)", listOf("Bob"))
+        
+        // If this fails, both inserts are rolled back
+        tx.execute("INSERT INTO audit_log (action) VALUES ($1)", listOf("users_added"))
+    }
+} catch (e: Exception) {
+    println("Transaction failed and was rolled back: ${e.message}")
+}
+```
+
+### Implementation Details
+
+The rollback mechanism is implemented in the `inTransaction` method:
+
+```kotlin
+suspend fun <T> inTransaction(block: suspend CardioTransaction.() -> T): T {
+    return withConnection { conn ->
+        val tx = conn.begin().coAwait()
+        val cardioTx = CardioTransaction(conn)
+        try {
+            val result = withContext(CardioTransaction.Context(cardioTx)) {
+                cardioTx.block()
+            }
+            tx.commit().coAwait()
+            result
+        } catch (e: Exception) {
+            tx.rollback().coAwait()
+            logger.error("Transaction rolled back due to error", e)
+            throw e
+        }
+    }
+}
+```
+
+<Info>
+The transaction is committed only if the block completes successfully. Any exception triggers an automatic rollback before re-throwing the exception.
+</Info>
+
+## Transaction Context
+
+Cardio uses coroutine context to propagate transaction state. This allows nested calls to access the current transaction:
+
+```kotlin
+data class Context(val tx: CardioTransaction) : CoroutineContext.Element {
+    companion object Key : CoroutineContext.Key<Context>
+
+    override val key: CoroutineContext.Key<*>
+        get() = Key
+}
+```
+
+### Nested Transaction Context
+
+When you call repository methods from within a transaction, they automatically use the current transaction:
+
+```kotlin
+class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
+    suspend fun create(name: String): Long {
+        return execute("INSERT INTO users (name) VALUES ($1)", listOf(name))
+    }
+}
+
+val userRepo = UserRepository(cardio)
+
+// The repository method uses the same transaction
+cardio.inTransaction { tx ->
+    // This creates a user within the transaction
+    userRepo.create("Alice")
+    
+    // If this fails, the user creation is also rolled back
+    tx.execute("INSERT INTO audit_log (action) VALUES ($1)", listOf("user_created"))
+}
+```
+
+## withConnection vs inTransaction
+
+Cardio provides two methods for working with database connections:
+
+### withConnection
+
+Obtains a connection from the pool without starting a transaction:
+
+```kotlin
+suspend fun <T> withConnection(block: suspend (conn: SqlConnection) -> T): T {
+    val conn = pool.connection.coAwait()
+    return conn.use(block)
+}
+```
+
+Use `withConnection` when you need direct access to the connection without transaction semantics:
+
+```kotlin
+cardio.withConnection { conn ->
+    // Direct connection operations
+    // No automatic transaction or rollback
+}
+```
+
+### inTransaction
+
+Wraps `withConnection` and adds transaction management with automatic commit/rollback:
+
+```kotlin
+cardio.inTransaction { tx ->
+    // Automatic transaction management
+    // Commit on success, rollback on exception
+}
+```
+
+<Warning>
+Prefer `inTransaction` for all data modification operations to ensure consistency. Use `withConnection` only for special cases that require direct connection access.
+</Warning>
+
+## Multiple Operations
+
+Execute multiple related operations in a single transaction to maintain data consistency:
+
+```kotlin
+cardio.inTransaction { tx ->
+    // Transfer money between accounts
+    val fromBalance = tx.query(
+        "SELECT balance FROM accounts WHERE id = $1 FOR UPDATE",
+        listOf(fromAccountId)
+    ) { row -> row.getAs<BigDecimal>("balance") }.first()
+    
+    require(fromBalance >= amount) { "Insufficient funds" }
+    
+    tx.execute(
+        "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+        listOf(amount, fromAccountId)
+    )
+    
+    tx.execute(
+        "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+        listOf(amount, toAccountId)
+    )
+    
+    tx.execute(
+        "INSERT INTO transactions (from_account, to_account, amount) VALUES ($1, $2, $3)",
+        listOf(fromAccountId, toAccountId, amount)
+    )
+}
+```
+
+## Error Handling
+
+Handle specific exceptions while still ensuring rollback:
+
+```kotlin
+try {
+    cardio.inTransaction { tx ->
+        tx.execute("INSERT INTO users (email) VALUES ($1)", listOf(email))
+    }
+} catch (e: Exception) {
+    when {
+        e.message?.contains("duplicate key") == true -> {
+            println("User with this email already exists")
+        }
+        else -> {
+            println("Failed to create user: ${e.message}")
+        }
+    }
+}
+```
+
+<Info>
+The transaction is automatically rolled back before the exception is caught, so you don't need to manually call rollback.
+</Info>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Transactions Short" icon="clock">
+    Minimize the time between beginning and committing transactions
+  </Card>
+  <Card title="Let Exceptions Propagate" icon="triangle-exclamation">
+    Don't catch exceptions inside transaction blocks unless necessary
+  </Card>
+  <Card title="Use FOR UPDATE" icon="lock">
+    Lock rows when you need to prevent concurrent modifications
+  </Card>
+  <Card title="Avoid I/O in Transactions" icon="network-wired">
+    Don't make external API calls or perform slow operations inside transactions
+  </Card>
+</CardGroup>
+
+## Complete Example
+
+```kotlin
+data class Order(
+    val id: Int,
+    val customerId: Int,
+    val total: BigDecimal
+)
+
+data class OrderItem(
+    val orderId: Int,
+    val productId: Int,
+    val quantity: Int
+)
+
+suspend fun createOrder(
+    customerId: Int,
+    items: List<OrderItem>
+): Order = cardio.inTransaction { tx ->
+    // Create the order
+    val orderId = tx.query(
+        "INSERT INTO orders (customer_id, total) VALUES ($1, $2) RETURNING id",
+        listOf(customerId, BigDecimal.ZERO)
+    ) { row -> row.getAs<Int>("id") }.first()
+    
+    // Add order items
+    var total = BigDecimal.ZERO
+    for (item in items) {
+        val price = tx.query(
+            "SELECT price FROM products WHERE id = $1",
+            listOf(item.productId)
+        ) { row -> row.getAs<BigDecimal>("price") }.first()
+        
+        tx.execute(
+            "INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)",
+            listOf(orderId, item.productId, item.quantity, price)
+        )
+        
+        total += price * item.quantity.toBigDecimal()
+    }
+    
+    // Update order total
+    tx.execute(
+        "UPDATE orders SET total = $1 WHERE id = $2",
+        listOf(total, orderId)
+    )
+    
+    Order(orderId, customerId, total)
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Repositories" icon="layer-group" href="/core/repositories">
+    Learn about the repository pattern for organizing data access
+  </Card>
+  <Card title="Queries" icon="database" href="/core/queries">
+    Master query execution and result mapping
+  </Card>
+</CardGroup>

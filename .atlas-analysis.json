@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Cardio",
+  "projectType": "sdk-library",
+  "projectName": "Cardio",
+  "projectDescription": "Coroutine-native PostgreSQL library for Kotlin built on Vert.x PG Client",
   "theme": "aspen",
-  "colors": {
-    "primary": "#5865F2",
-    "light": "#7289DA",
-    "dark": "#4752C4"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/Blad3Mak3r/cardio"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/Blad3Mak3r/cardio"
-    }
-  },
+  "primaryColor": "#5865F2",
+  "lightColor": "#7289DA",
+  "darkColor": "#4752C4",
   "navigation": {
     "tabs": [
       {
@@ -55,5 +43,25 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Reactive and non-blocking PostgreSQL client",
+    "Native Kotlin coroutines support",
+    "Transaction management with automatic rollback",
+    "Repository pattern for structured data access",
+    "Built-in connection pooling",
+    "Type-safe row mapping extensions",
+    "PostgreSQL connection URL parsing"
+  ],
+  "publicApiSurface": [
+    "Cardio.create<T>",
+    "Cardio.inTransaction",
+    "Cardio.withConnection",
+    "CardioRepository",
+    "CardioTransaction.query",
+    "CardioTransaction.execute",
+    "Row.getAs<T>",
+    "Row.getAsNullable<T>",
+    "Cardio.Configuration.url"
+  ]
 }

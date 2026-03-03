@@ -1,0 +1,155 @@
+---
+title: 'Cardio'
+description: 'Core database client class for managing PostgreSQL connections and transactions'
+---
+
+## Overview
+
+The `Cardio` class is the main entry point for interacting with PostgreSQL databases. It manages connection pools and provides methods for executing queries within connections and transactions.
+
+## Configuration
+
+<ResponseField name="Configuration" type="data class">
+  Configuration object for creating a Cardio instance.
+
+  <Expandable title="properties">
+    <ResponseField name="connectOptions" type="PgConnectOptions" default="PgConnectOptions()">
+      PostgreSQL connection options including host, port, database, credentials, and other connection parameters.
+    </ResponseField>
+
+    <ResponseField name="poolOptions" type="PoolOptions" default="PoolOptions()">
+      Connection pool options including pool size, connection timeout, and idle timeout settings.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Methods
+
+### create
+
+Creates and initializes a new Cardio instance with the specified configuration.
+
+```kotlin
+suspend inline fun <reified T : Cardio> create(builder: Configuration.() -> Unit): T
+suspend inline fun <reified T : Cardio> create(configuration: Configuration): T
+```
+
+<ParamField path="builder" type="Configuration.() -> Unit" required>
+  Lambda function to configure the Cardio instance. Receives a `Configuration` object to set connection and pool options.
+</ParamField>
+
+<ParamField path="configuration" type="Configuration" required>
+  Pre-configured `Configuration` object with connection and pool settings.
+</ParamField>
+
+**Returns:** `T` - An instance of type `T` that extends `Cardio`, connected and ready to use.
+
+**Example:**
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    connectOptions = PgConnectOptions()
+        .setHost("localhost")
+        .setPort(5432)
+        .setDatabase("mydb")
+        .setUser("user")
+        .setPassword("password")
+    
+    poolOptions = PoolOptions()
+        .setMaxSize(10)
+}
+```
+
+### withConnection
+
+Executes a block of code with a dedicated database connection from the pool.
+
+```kotlin
+suspend fun <T> withConnection(block: suspend (conn: SqlConnection) -> T): T
+```
+
+<ParamField path="block" type="suspend (SqlConnection) -> T" required>
+  Suspend function that receives a `SqlConnection` and returns a result of type `T`. The connection is automatically returned to the pool after execution.
+</ParamField>
+
+**Returns:** `T` - The result returned by the block function.
+
+**Example:**
+
+```kotlin
+val result = cardio.withConnection { conn ->
+    // Use the connection directly
+    conn.query("SELECT * FROM users").execute().coAwait()
+}
+```
+
+### inTransaction
+
+Executes a block of code within a database transaction. The transaction is automatically committed on success or rolled back on error.
+
+```kotlin
+suspend fun <T> inTransaction(block: suspend CardioTransaction.() -> T): T
+```
+
+<ParamField path="block" type="suspend CardioTransaction.() -> T" required>
+  Suspend function executed within a transaction context. Receives a `CardioTransaction` receiver for executing queries. Automatically commits on success or rolls back on exception.
+</ParamField>
+
+**Returns:** `T` - The result returned by the block function.
+
+**Example:**
+
+```kotlin
+val userId = cardio.inTransaction {
+    // Insert a user
+    execute(
+        "INSERT INTO users (name, email) VALUES ($1, $2)",
+        listOf("John Doe", "john@example.com")
+    )
+    
+    // Query the inserted user
+    query("SELECT id FROM users WHERE email = $1", listOf("john@example.com")) { row ->
+        row.getInteger("id")
+    }.first()
+}
+```
+
+## Usage
+
+### Basic Setup
+
+```kotlin
+import io.github.blad3mak3r.cardio.postgres.Cardio
+import io.vertx.pgclient.PgConnectOptions
+import io.vertx.sqlclient.PoolOptions
+
+suspend fun main() {
+    val cardio = Cardio.create<Cardio> {
+        connectOptions = PgConnectOptions()
+            .setHost("localhost")
+            .setPort(5432)
+            .setDatabase("mydb")
+            .setUser("user")
+            .setPassword("password")
+        
+        poolOptions = PoolOptions()
+            .setMaxSize(10)
+    }
+    
+    // Use cardio instance
+}
+```
+
+### Transaction Example
+
+```kotlin
+val result = cardio.inTransaction {
+    // All queries in this block share the same transaction
+    execute("INSERT INTO accounts (name, balance) VALUES ($1, $2)", listOf("Alice", 1000))
+    execute("INSERT INTO accounts (name, balance) VALUES ($1, $2)", listOf("Bob", 500))
+    
+    query("SELECT SUM(balance) as total FROM accounts", emptyList()) { row ->
+        row.getInteger("total")
+    }.first()
+}
+```

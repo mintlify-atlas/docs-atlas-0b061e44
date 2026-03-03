@@ -1,0 +1,186 @@
+---
+title: Configuration
+description: Learn how to configure Cardio with connection options, pool settings, and custom database classes
+---
+
+## Overview
+
+Cardio provides flexible configuration options for connecting to PostgreSQL databases. You can configure connections using either connection URLs or detailed connection options, along with customizable pool settings.
+
+## Basic Configuration
+
+Create a Cardio instance using the `create` factory method with a configuration block:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    url("postgres://user:password@localhost:5432/my_database?sslmode=disable")
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
+}
+```
+
+## Connection URL Method
+
+The `url()` method provides a convenient way to configure connections using PostgreSQL connection strings.
+
+### URL Format
+
+```
+postgres://[user[:password]@]host[:port][/database][?param=value&...]
+```
+
+### Supported Schemes
+
+- `postgres`
+- `postgresql`
+
+### Query Parameters
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `sslmode` | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | SSL connection mode |
+
+### Example
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    url("postgres://user:secret@localhost:5432/mydb")
+}
+```
+
+## PgConnectOptions Approach
+
+For more granular control, use `PgConnectOptions` directly:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    connectOptions = PgConnectOptions().apply {
+        host = "localhost"
+        port = 5432
+        database = "my_database"
+        user = "user"
+        password = "password"
+    }
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
+}
+```
+
+## Pool Configuration
+
+Configure connection pooling with `PoolOptions`:
+
+```kotlin
+val cardio = Cardio.create<Cardio> {
+    url("postgres://user:password@localhost:5432/mydb")
+    poolOptions = PoolOptions().apply {
+        maxSize = 20              // Maximum pool size
+        maxWaitQueueSize = 50     // Maximum wait queue size
+        idleTimeout = 30          // Idle timeout in seconds
+        connectionTimeout = 5000  // Connection timeout in milliseconds
+    }
+}
+```
+
+## Configuration Class
+
+The `Configuration` class holds all connection and pool settings:
+
+```kotlin
+data class Configuration(
+    var connectOptions: PgConnectOptions = PgConnectOptions(),
+    var poolOptions: PoolOptions = PoolOptions()
+)
+```
+
+### Properties
+
+<ParamField path="connectOptions" type="PgConnectOptions" default="PgConnectOptions()">
+  PostgreSQL connection options including host, port, database, credentials, and SSL settings.
+</ParamField>
+
+<ParamField path="poolOptions" type="PoolOptions" default="PoolOptions()">
+  Connection pool configuration including pool size, timeouts, and queue limits.
+</ParamField>
+
+## Custom Cardio Subclass
+
+Extend `Cardio` to create a custom database context with strongly-typed repositories:
+
+```kotlin
+// Define your custom database class
+class MyDb(pool: Pool) : Cardio(pool)
+
+// Create an instance
+val myDb = Cardio.create<MyDb> {
+    connectOptions = PgConnectOptions().apply {
+        host = "localhost"
+        port = 5432
+        database = "my_database"
+        user = "user"
+        password = "password"
+    }
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
+}
+
+// Define a repository that requires MyDb
+class MyRepo(db: MyDb) : CardioRepository<MyDb>(db) {
+    suspend fun customOperation() {
+        // Your custom operations here
+    }
+}
+
+// Use the repository with your custom database
+val myRepo = MyRepo(myDb)
+```
+
+<Info>
+The generic `create<T>` method uses reflection to instantiate your custom `Cardio` subclass, automatically handling connection pool configuration and initialization.
+</Info>
+
+## Connection Verification
+
+When a Cardio instance is created, it automatically verifies the database connection by executing a version check:
+
+```kotlin
+val version = c.inTransaction {
+    query(stmt = "SELECT version()") { row ->
+        row.getString("version")
+    }.first()
+}
+logger.info("Connected to Postgres version: $version")
+```
+
+This ensures the database is accessible before your application starts.
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Connection URLs" icon="link">
+    For simple configurations, connection URLs are concise and portable
+  </Card>
+  <Card title="Configure Pool Size" icon="users">
+    Set appropriate pool size based on your application's concurrency needs
+  </Card>
+  <Card title="Custom Subclasses" icon="code">
+    Extend Cardio for type-safe repository patterns in larger applications
+  </Card>
+  <Card title="Environment Variables" icon="lock">
+    Store credentials in environment variables, not in code
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Executing Queries" icon="database" href="/core/queries">
+    Learn how to execute queries and map results
+  </Card>
+  <Card title="Transactions" icon="rotate" href="/core/transactions">
+    Understand transaction management and rollback handling
+  </Card>
+</CardGroup>

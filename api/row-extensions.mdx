@@ -1,0 +1,181 @@
+---
+title: Row Extensions
+description: Extension functions for working with database rows
+---
+
+## Overview
+
+Cardio provides extension functions for the Vert.x `Row` type to simplify column value extraction with type safety and null handling.
+
+## Type Alias
+
+```kotlin
+typealias Row = io.vertx.sqlclient.Row
+```
+
+The `Row` type alias references the Vert.x SQL client's Row interface for better readability.
+
+## Functions
+
+### getAs
+
+Extracts a column value as a non-nullable type.
+
+```kotlin
+inline fun <reified T> Row.getAs(name: String): T
+inline fun <reified T> Row.getAs(index: Int): T
+```
+
+<ParamField path="name" type="String">
+  The name of the column to retrieve
+</ParamField>
+
+<ParamField path="index" type="Int">
+  The zero-based index of the column to retrieve
+</ParamField>
+
+<ParamField path="T" type="Type Parameter">
+  The expected return type (inferred from usage)
+</ParamField>
+
+**Returns:** The column value cast to type `T`
+
+**Throws:** `IllegalStateException` if the column value is null
+
+#### Examples
+
+```kotlin
+val row: Row = // ... from query result
+
+// By column name
+val userId: Long = row.getAs("user_id")
+val email: String = row.getAs("email")
+val createdAt: LocalDateTime = row.getAs("created_at")
+
+// By column index
+val id: Long = row.getAs(0)
+val name: String = row.getAs(1)
+
+// Will throw if null
+try {
+    val nullable: String = row.getAs("optional_field") // throws if null
+} catch (e: IllegalStateException) {
+    println("Column is null")
+}
+```
+
+### getAsNullable
+
+Extracts a column value as a nullable type.
+
+```kotlin
+inline fun <reified T> Row.getAsNullable(name: String): T?
+inline fun <reified T> Row.getAsNullable(index: Int): T?
+```
+
+<ParamField path="name" type="String">
+  The name of the column to retrieve
+</ParamField>
+
+<ParamField path="index" type="Int">
+  The zero-based index of the column to retrieve
+</ParamField>
+
+<ParamField path="T" type="Type Parameter">
+  The expected return type (inferred from usage)
+</ParamField>
+
+**Returns:** The column value cast to type `T`, or `null` if the column value is null
+
+#### Examples
+
+```kotlin
+val row: Row = // ... from query result
+
+// By column name
+val middleName: String? = row.getAsNullable("middle_name")
+val phoneNumber: String? = row.getAsNullable("phone")
+
+// By column index
+val optionalField: String? = row.getAsNullable(5)
+
+// Safe handling of nullable columns
+val description = row.getAsNullable<String>("description") ?: "No description"
+```
+
+### SqlConnection.use
+
+Executes a block of code with a SQL connection and automatically closes it afterwards.
+
+```kotlin
+suspend fun <T> SqlConnection.use(block: suspend (SqlConnection) -> T): T
+```
+
+<ParamField path="block" type="suspend (SqlConnection) -> T">
+  The suspend function to execute with the connection
+</ParamField>
+
+**Returns:** The result of the block execution
+
+The connection is guaranteed to be closed even if an exception is thrown.
+
+#### Example
+
+```kotlin
+val pool: PgPool = // ... your connection pool
+
+val result = pool.connection.coAwait().use { conn ->
+    // Connection is automatically managed
+    val rows = conn.preparedQuery("SELECT * FROM users WHERE id = $1")
+        .execute(Tuple.of(userId))
+        .coAwait()
+    
+    rows.map { row ->
+        User(
+            id = row.getAs("id"),
+            name = row.getAs("name"),
+            email = row.getAsNullable("email")
+        )
+    }
+    // Connection is closed here automatically
+}
+```
+
+## Error Behavior
+
+### getAs Functions
+
+The `getAs` functions throw an `IllegalStateException` when attempting to extract a null value:
+
+- `getAs(name: String)`: Throws with message `"Column 'name' is null"`
+- `getAs(index: Int)`: Throws with message `"Column at index 'index' is null"`
+
+### getAsNullable Functions
+
+The `getAsNullable` functions never throw exceptions for null values. They return `null` when the column value is null.
+
+## Best Practices
+
+1. **Use getAs for required fields**: When you know a column should never be null in your schema, use `getAs` to fail fast on unexpected nulls.
+
+2. **Use getAsNullable for optional fields**: When a column is nullable by design, use `getAsNullable` to handle the null case explicitly.
+
+3. **Prefer column names over indices**: Using column names makes your code more maintainable and resistant to schema changes.
+
+4. **Use SqlConnection.use for automatic cleanup**: Always use the `use` extension to ensure connections are properly closed, even when exceptions occur.
+
+```kotlin
+// Good: Clear intent and automatic null handling
+val user = User(
+    id = row.getAs("id"),              // Required field
+    name = row.getAs("name"),          // Required field  
+    email = row.getAsNullable("email") // Optional field
+)
+
+// Avoid: Using indices makes code fragile
+val user = User(
+    id = row.getAs(0),
+    name = row.getAs(1),
+    email = row.getAsNullable(2)
+)
+```
