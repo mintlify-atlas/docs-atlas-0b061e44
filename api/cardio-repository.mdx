@@ -110,9 +110,9 @@ class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
             args = listOf(id)
         ) { row ->
             User(
-                id = row.getInteger("id"),
-                name = row.getString("name"),
-                email = row.getString("email")
+                id = row.getAs<Int>("id"),
+                name = row.getAs<String>("name"),
+                email = row.getAs<String>("email")
             )
         }.firstOrNull()
     }
@@ -122,9 +122,9 @@ class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
             stmt = "SELECT id, name, email FROM users"
         ) { row ->
             User(
-                id = row.getInteger("id"),
-                name = row.getString("name"),
-                email = row.getString("email")
+                id = row.getAs<Int>("id"),
+                name = row.getAs<String>("name"),
+                email = row.getAs<String>("email")
             )
         }
     }
@@ -134,7 +134,7 @@ class UserRepository(db: Cardio) : CardioRepository<Cardio>(db) {
             stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
             args = listOf(name, email)
         ) { row ->
-            row.getInteger("id")
+            row.getAs<Int>("id")
         }.first()
     }
     
@@ -214,7 +214,7 @@ class OrderRepository(db: Cardio) : CardioRepository<Cardio>(db) {
         return query(
             "INSERT INTO orders (user_id, total) VALUES ($1, $2) RETURNING id",
             listOf(userId, total)
-        ) { row -> row.getInteger("id") }.first()
+        ) { row -> row.getAs<Int>("id") }.first()
     }
 }
 

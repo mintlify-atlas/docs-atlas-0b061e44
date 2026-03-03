@@ -214,7 +214,7 @@ class MyDb(pool: Pool) : Cardio(pool) {
     suspend fun healthCheck(): Boolean {
         return try {
             inTransaction { tx ->
-                tx.query("SELECT 1") { it.getInteger(0) }
+                tx.query("SELECT 1") { it.getAs<Int>(0) }
             }
             true
         } catch (e: Exception) {

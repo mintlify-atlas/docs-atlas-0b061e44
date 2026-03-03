@@ -128,7 +128,7 @@ Cardio automatically verifies the connection on startup by querying the PostgreS
 ```kotlin
 val version = c.inTransaction {
     query(stmt = "SELECT version()") { row ->
-        row.getString("version")
+        row.getAs<String>("version")
     }.first()
 }
 logger.info("Connected to Postgres version: $version")

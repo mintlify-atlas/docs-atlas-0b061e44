@@ -54,9 +54,9 @@ cardio.inTransaction {
         args = listOf(18)
     ) { row ->
         User(
-            id = row.getInteger("id"),
-            name = row.getString("name"),
-            email = row.getString("email")
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            email = row.getAs<String>("email")
         )
     }
 }
@@ -118,7 +118,7 @@ cardio.inTransaction {
     val users = query(
         stmt = "SELECT id, name FROM users"
     ) { row ->
-        row.getInteger("id") to row.getString("name")
+        row.getAs<Int>("id") to row.getAs<String>("name")
     }
     
     println("Found ${users.size} users")
@@ -134,10 +134,10 @@ cardio.inTransaction {
         args = listOf("active", 21)
     ) { row ->
         User(
-            id = row.getInteger("id"),
-            name = row.getString("name"),
-            status = row.getString("status"),
-            age = row.getInteger("age")
+            id = row.getAs<Int>("id"),
+            name = row.getAs<String>("name"),
+            status = row.getAs<String>("status"),
+            age = row.getAs<Int>("age")
         )
     }
 }
@@ -151,7 +151,7 @@ cardio.inTransaction {
         stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
         args = listOf("John Doe", "john@example.com")
     ) { row ->
-        row.getInteger("id")
+        row.getAs<Int>("id")
     }.first()
     
     println("Created user with ID: $newUserId")
@@ -194,7 +194,7 @@ cardio.inTransaction {
     val userId = query(
         stmt = "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
         args = listOf("Alice", "alice@example.com")
-    ) { row -> row.getInteger("id") }.first()
+    ) { row -> row.getAs<Int>("id") }.first()
     
     // Create a profile for the user
     execute(

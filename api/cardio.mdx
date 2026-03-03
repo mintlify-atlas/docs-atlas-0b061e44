@@ -48,15 +48,17 @@ suspend inline fun <reified T : Cardio> create(configuration: Configuration): T
 
 ```kotlin
 val cardio = Cardio.create<Cardio> {
-    connectOptions = PgConnectOptions()
-        .setHost("localhost")
-        .setPort(5432)
-        .setDatabase("mydb")
-        .setUser("user")
-        .setPassword("password")
+    connectOptions = PgConnectOptions().apply {
+        host = "localhost"
+        port = 5432
+        database = "mydb"
+        user = "user"
+        password = "password"
+    }
     
-    poolOptions = PoolOptions()
-        .setMaxSize(10)
+    poolOptions = PoolOptions().apply {
+        maxSize = 10
+    }
 }
 ```
 
@@ -109,7 +111,7 @@ val userId = cardio.inTransaction {
     
     // Query the inserted user
     query("SELECT id FROM users WHERE email = $1", listOf("john@example.com")) { row ->
-        row.getInteger("id")
+        row.getAs<Int>("id")
     }.first()
 }
 ```
@@ -125,15 +127,17 @@ import io.vertx.sqlclient.PoolOptions
 
 suspend fun main() {
     val cardio = Cardio.create<Cardio> {
-        connectOptions = PgConnectOptions()
-            .setHost("localhost")
-            .setPort(5432)
-            .setDatabase("mydb")
-            .setUser("user")
-            .setPassword("password")
+        connectOptions = PgConnectOptions().apply {
+            host = "localhost"
+            port = 5432
+            database = "mydb"
+            user = "user"
+            password = "password"
+        }
         
-        poolOptions = PoolOptions()
-            .setMaxSize(10)
+        poolOptions = PoolOptions().apply {
+            maxSize = 10
+        }
     }
     
     // Use cardio instance
@@ -149,7 +153,7 @@ val result = cardio.inTransaction {
     execute("INSERT INTO accounts (name, balance) VALUES ($1, $2)", listOf("Bob", 500))
     
     query("SELECT SUM(balance) as total FROM accounts", emptyList()) { row ->
-        row.getInteger("total")
+        row.getAs<Int>("total")
     }.first()
 }
 ```

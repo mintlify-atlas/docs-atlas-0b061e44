@@ -149,7 +149,7 @@ When a Cardio instance is created, it automatically verifies the database connec
 ```kotlin
 val version = c.inTransaction {
     query(stmt = "SELECT version()") { row ->
-        row.getString("version")
+        row.getAs<String>("version")
     }.first()
 }
 logger.info("Connected to Postgres version: $version")

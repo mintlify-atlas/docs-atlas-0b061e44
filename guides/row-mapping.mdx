@@ -243,7 +243,7 @@ val users = tx.query("SELECT id, name, settings FROM users") { row ->
     val settingsJson = row.getAsNullable<JsonObject>("settings")
     val settings = settingsJson?.let {
         UserSettings(
-            theme = it.getString("theme"),
+            theme = it.getAs<String>("theme"),
             notifications = it.getBoolean("notifications")
         )
     }
